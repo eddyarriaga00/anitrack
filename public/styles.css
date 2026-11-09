@@ -281,6 +281,23 @@ dl.facts { max-width: 420px; margin: 0 0 18px; }
 .lrow select { padding: 6px 8px; font-size: 13px; }
 .sched-tools { display: flex; gap: 8px; }
 
+/* ---------- watch button ---------- */
+.watchbox { display: grid; gap: 8px; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.watch-go { font-size: 15px; padding: 12px 18px; }
+.watch-go img { width: 20px; height: 20px; border-radius: 5px; padding: 3px; background: rgba(255,255,255,.25); }
+.watch-on { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--faint); }
+.watch-on select { flex: 1; padding: 6px 10px; font-size: 13px; }
+.watchbox .link, .watchbox .note { text-align: center; font-size: 12px; }
+.notice.prefs .watch-on { min-width: 260px; }
+.askbar { position: fixed; z-index: 55; left: 50%; bottom: 84px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 14px 12px 18px; border-radius: 16px; background: rgba(22,22,34,.97); backdrop-filter: blur(14px); border: 1px solid rgba(139,92,246,.5);
+  box-shadow: 0 20px 50px rgba(0,0,0,.7); max-width: calc(100vw - 24px); animation: fi .3s ease both; }
+.askbar .btn { white-space: nowrap; }
+@media (min-width: 721px) { .askbar { flex-wrap: nowrap; } }
+.askbar div { margin-right: 6px; min-width: 0; }
+.askbar b { display: block; font-size: 15px; }
+.askbar span { font-size: 12.5px; color: var(--dim); display: block; max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 /* skeletons */
 .sk { background: linear-gradient(100deg, var(--card) 30%, var(--card2) 50%, var(--card) 70%); background-size: 300% 100%; animation: sh 1.4s infinite linear; border-radius: var(--r); }
 .sk.poster-sk { aspect-ratio: 2/3; }

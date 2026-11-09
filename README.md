@@ -31,6 +31,7 @@ GitHub Pages only hosts static files. MyAnimeList's API requires a small server 
   - One tap for "✓ Watched episode N", or tap any episode number. Set status and score too.
   - Shows are marked completed automatically on the last episode.
   - Every card on My List has a **+1 ep** button.
+- **▶ Watch button:** each show page has "Watch EP N on Crunchyroll" (or your service). It links straight to the episode when the service provides episode links. You can choose a service per show, or set a default for every show on My List. When you come back, AniTrack asks "Finished episode N?" so logging it takes one tap.
 - **Dates, rewatches and notes:** start and finish dates fill in automatically (and can be edited), plus a rewatch count and private notes. All of these sync to MAL when connected.
 - **Watch history:** a 30-day episode chart, your day streak and a recent-activity feed
 - **Share your list:** "🔗 Share my list" copies a link anyone can open on the live site, with your statuses, progress, scores and how many shows they share with you

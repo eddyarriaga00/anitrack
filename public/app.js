@@ -552,6 +552,7 @@ async function pageMyList() {
       <div><b>${days}</b><span>Days watched</span></div><div><b>${mean}</b><span>Mean score</span></div>
     </div>
     ${insights(all, counts)}
+    ${prefsPanel()}
     ${activityPanel()}
     ${banner}
     <div class="page-h"><div class="tabs">${Object.entries(STATUSES).map(([k, v]) => `<button data-list="${k}" class="${k === state.listStatus ? "on" : ""}">${v} <i>${counts[k]}</i></button>`).join("")}</div>
@@ -749,6 +750,7 @@ async function pageDetail(kind, id) {
   const studio = m.studios?.nodes?.[0];
   const date = d => d?.year ? new Date(d.year, (d.month || 1) - 1, d.day || 1).toLocaleDateString(undefined, { year: "numeric", month: "short", ...(d.day ? { day: "numeric" } : {}) }) : null;
   const streams = (m.externalLinks || []).filter(l => l.type === "STREAMING");
+  cur.streams = streams;
   const official = (m.externalLinks || []).find(l => l.site === "Official Site");
   const related = (m.relations?.edges || []).filter(e => e.node.type === "ANIME").map(e => ({ ...e.node, _rel: e.relationType }));
   const recs = (m.recommendations?.nodes || []).map(n => n.mediaRecommendation).filter(Boolean);
@@ -828,12 +830,12 @@ function renderTracker() {
   const trackable = T.canTrack(cur.ref);
   const e = cur.e;
 
-  if (!trackable) el.innerHTML = `<p class="note">This title isn't on MyAnimeList yet, so it can't be synced.</p>`;
+  if (!trackable) el.innerHTML = `${watchBox()}<p class="note">This title isn't on MyAnimeList yet, so it can't be synced.</p>`;
   else {
     const nextEp = w + 1;
     const canNext = nextEp <= Math.max(aired, total && m.status === "FINISHED" ? total : 0);
-    el.innerHTML = `<div class="tracker">
-      ${canNext ? `<button class="btn primary wide" data-step="1">✓ Watched episode ${nextEp}</button>` : e?.status === "completed" ? `<div class="done">✓ Completed</div>` : ""}
+    el.innerHTML = `${watchBox()}<div class="tracker">
+      ${canNext ? `<button class="btn ${cur.streams?.length ? "" : "primary"} wide" data-step="1">✓ Watched episode ${nextEp}</button>` : e?.status === "completed" ? `<div class="done">✓ Completed</div>` : ""}
       <div class="prog"><button data-step="-1" aria-label="One episode less">−</button>
         <div class="num">${w}<small> / ${total || "?"}</small></div>
         <button class="inc" data-step="1" aria-label="One episode more">+</button></div>
@@ -871,6 +873,75 @@ async function updateEntry(fields, msg) {
     $("#saved") && ($("#saved").textContent = T.mal ? "✓ Synced to MyAnimeList" : "✓ Saved");
     if (msg) toast(msg);
   } catch (err) { toast(err.message, "err"); if (saved) saved.textContent = ""; }
+}
+
+// =============== where you watch ===============
+const PKEY = "anitrack.prefs.v1";
+const prefs = {
+  get() { try { return JSON.parse(localStorage.getItem(PKEY)) || {}; } catch { return {}; } },
+  set(patch) { const p = { ...this.get(), ...patch }; try { localStorage.setItem(PKEY, JSON.stringify(p)); } catch {} return p; },
+};
+const SERVICES = ["Crunchyroll", "Netflix", "HIDIVE", "Hulu", "Amazon Prime Video", "Disney Plus", "Max", "Bilibili TV", "YouTube", "Muse Asia", "Ani-One Asia", "Tubi TV", "RetroCrush"];
+const sameSite = (a, b) => String(a || "").toLowerCase().replace(/[^a-z]/g, "") === String(b || "").toLowerCase().replace(/[^a-z]/g, "");
+function pickStream(streams, alId) {
+  const p = prefs.get();
+  return streams.find(l => sameSite(l.site, p.perShow?.[alId])) || streams.find(l => sameSite(l.site, p.service)) || streams[0];
+}
+function watchBox() {
+  const m = cur.m, streams = cur.streams || [];
+  if (!streams.length) return "";
+  const pick = pickStream(streams, m.id);
+  const { aired, total, w } = epCounts();
+  const done = total && w >= total;
+  const nextEp = done ? 1 : w + 1;
+  const available = nextEp <= Math.max(aired, m.status === "FINISHED" ? total : 0);
+  const epLink = (m.streamingEpisodes || []).find(s => sameSite(s.site, pick.site) && Number((s.title.match(/Episode\s+(\d+)/i) || [])[1]) === nextEp);
+  const p = prefs.get();
+  const isDefault = sameSite(p.service, pick.site);
+  return `<div class="watchbox">
+    <a class="btn primary wide watch-go" style="--lc:${esc(pick.color || "#8b5cf6")}" href="${esc(epLink?.url || pick.url)}" target="_blank" rel="noopener" data-watch="${available ? nextEp : 0}">
+      ${pick.icon ? `<img src="${esc(pick.icon)}" alt="">` : "▶"} ${done ? "Rewatch" : available ? `Watch EP ${nextEp}` : "Open"} on ${esc(pick.site)}</a>
+    ${streams.length > 1 ? `<label class="watch-on">Watch on<select data-pick-service aria-label="Streaming service for this show">${streams.map(l => `<option ${l === pick ? "selected" : ""}>${esc(l.site)}</option>`).join("")}</select></label>` : ""}
+    ${!isDefault ? `<button class="link" data-default-service="${esc(pick.site)}">Make ${esc(pick.site)} my default for every show</button>` : `<span class="note small">★ Your default service</span>`}
+  </div>`;
+}
+// "Did you finish it?" prompt after coming back from a streaming site
+const PENDING = "anitrack.pending";
+function setPending(ep) {
+  const m = cur.m;
+  try { sessionStorage.setItem(PENDING, JSON.stringify({ ep, t: Date.now(), ref: refOf(m), title: titleOf(m), total: m.episodes || 0 })); } catch {}
+}
+function getPending() { try { return JSON.parse(sessionStorage.getItem(PENDING)); } catch { return null; } }
+function clearPending() { try { sessionStorage.removeItem(PENDING); } catch {} $("#askbar").hidden = true; }
+async function maybeAsk() {
+  const p = getPending();
+  if (!p || Date.now() - p.t < 4000 || Date.now() - p.t > 6 * 3600 * 1000) return;
+  if (!T.canTrack(p.ref)) return clearPending();
+  const e = cur.m?.id === p.ref.alId ? cur.e : await T.get(p.ref).catch(() => null);
+  if ((e?.watched || 0) >= p.ep) return clearPending();
+  const bar = $("#askbar");
+  bar.innerHTML = `<div><b>Finished episode ${p.ep}?</b><span>${esc(p.title)}</span></div>
+    <button class="btn sm primary" data-ask="yes">✓ Yes, log it</button><button class="btn sm" data-ask="no">Not yet</button>`;
+  bar.hidden = false;
+}
+async function answerAsk(yes) {
+  const p = getPending(); clearPending();
+  if (!yes || !p) return;
+  if (cur.m?.id === p.ref.alId) return setProgress(p.ep);
+  try {
+    const prev = await T.get(p.ref).catch(() => null);
+    await track(p.ref, prev, progressFields({ ...p.ref, ...(prev || {}), total: p.total }, p.ep));
+    toast(`Episode ${p.ep} of ${p.title} logged`);
+    if (location.hash.startsWith("#mylist") || location.hash.startsWith("#home") || !location.hash) route({ keepScroll: true });
+  } catch (err) { toast(err.message, "err"); }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") setTimeout(maybeAsk, 400); });
+addEventListener("focus", () => setTimeout(maybeAsk, 400));
+
+function prefsPanel() {
+  const p = prefs.get();
+  return `<div class="notice prefs"><div><b>Where you watch</b> — the ▶ Watch button on each show opens your default service when the show is on it.</div>
+    <label class="watch-on">Default service<select data-global-service><option value="">First available</option>${SERVICES.map(x => `<option ${sameSite(x, p.service) ? "selected" : ""}>${x}</option>`).join("")}</select></label></div>`;
 }
 
 function setProgress(n) {
@@ -960,7 +1031,7 @@ async function route(opts = {}) {
 
 // =============== events ===============
 document.addEventListener("click", async ev => {
-  const t = ev.target.closest("[data-trailer],[data-scroll],[data-dot],[data-qadd],[data-plus],[data-ep],[data-step],[data-list],[data-sched],[data-remove],[data-more],[data-more-browse],[data-more-studio],[data-inline-trailer],[data-retry],[data-logout],[data-close],[data-export],[data-sync],[data-share],[data-share-list],[data-shared],[data-view],[data-lstep],[data-ics]");
+  const t = ev.target.closest("[data-trailer],[data-scroll],[data-dot],[data-qadd],[data-plus],[data-ep],[data-step],[data-list],[data-sched],[data-remove],[data-more],[data-more-browse],[data-more-studio],[data-inline-trailer],[data-retry],[data-logout],[data-close],[data-export],[data-sync],[data-share],[data-share-list],[data-shared],[data-view],[data-lstep],[data-ics],[data-watch],[data-ask],[data-default-service]");
   if (!t) return;
   const d = t.dataset;
   if (d.trailer) openTrailer(d.trailer);
@@ -1014,6 +1085,9 @@ document.addEventListener("click", async ev => {
   else if (d.close !== undefined) t.closest("dialog").close();
   else if (d.export) exportList(d.export);
   else if (d.sync !== undefined) syncLocalToMal(t);
+  else if (d.watch !== undefined) { if (Number(d.watch) && T.canTrack(cur.ref)) setPending(Number(d.watch)); }
+  else if (d.ask) answerAsk(d.ask === "yes");
+  else if (d.defaultService) { prefs.set({ service: d.defaultService }); toast(`${d.defaultService} is now your default`); renderTracker(); }
   else if (d.shareList !== undefined) shareList(t);
   else if (d.shared) { state.sharedStatus = d.shared; route({ keepScroll: true }); }
   else if (d.view) { state.listView = d.view; try { localStorage.setItem("anitrack.view", d.view); } catch {} route({ keepScroll: true }); }
@@ -1045,6 +1119,11 @@ document.addEventListener("change", ev => {
     track(e, { ...e }, { score: Number(el.value) }).then(s => { e.score = s.score; toast(`Scored ${e.title} ${s.score || "–"}`); }).catch(err => toast(err.message, "err"));
     return;
   }
+  if (el.matches("[data-pick-service]")) {
+    const p = prefs.get(); prefs.set({ perShow: { ...(p.perShow || {}), [cur.m.id]: el.value } });
+    renderTracker(); toast(`Watching ${titleOf(cur.m)} on ${el.value}`); return;
+  }
+  if (el.matches("[data-global-service]")) { prefs.set({ service: el.value }); toast(el.value ? `${el.value} is now your default` : "Default cleared"); return; }
   if (el.matches("[data-sort-list]")) { state.listSort = el.value; return route({ keepScroll: true }); }
   if (el.matches("[data-browse]")) {
     const p = hashParams(); el.value ? p.set(el.dataset.browse, el.value) : p.delete(el.dataset.browse);

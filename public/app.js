@@ -338,7 +338,7 @@ async function pageHome() {
 
 function onboarding() {
   return `<section class="onboard fade-in">
-    <div><h2>Start your list</h2><p>Open any show and tap an episode to track it. ${T.mal ? "Everything syncs to MyAnimeList." : "It's saved on this device right away — connect MyAnimeList any time to sync."}</p></div>
+    <div><h2>Start your list</h2><p>Open any show and tap an episode to track it. ${T.mal ? "Everything syncs to MyAnimeList." : state.auth.static ? "It's saved in this browser — export it to MyAnimeList from My List any time." : "It's saved on this device right away — connect MyAnimeList any time to sync."}</p></div>
     <div class="actions"><a class="btn primary" href="#browse?season=${currentSeason().season}&year=${currentSeason().year}">Browse this season</a><a class="btn" href="#random">🎲 Surprise me</a></div>
   </section>`;
 }

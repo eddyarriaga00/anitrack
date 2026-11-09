@@ -13,7 +13,7 @@ const SEASONS = ["WINTER", "SPRING", "SUMMER", "FALL"];
 const GENRES = ["Action", "Adventure", "Comedy", "Drama", "Ecchi", "Fantasy", "Horror", "Mahou Shoujo", "Mecha", "Music", "Mystery", "Psychological", "Romance", "Sci-Fi", "Slice of Life", "Sports", "Supernatural", "Thriller"];
 const SCORE_WORDS = ["", "Appalling", "Horrible", "Very bad", "Bad", "Average", "Fine", "Good", "Very good", "Great", "Masterpiece"];
 
-const state = { auth: { configured: false, loggedIn: false }, user: null, listStatus: "watching", listSort: "updated", schedMine: false, heroTimer: null };
+const state = { icsItems: [], listView: (() => { try { return localStorage.getItem("anitrack.view") || "grid"; } catch { return "grid"; } })(), auth: { configured: false, loggedIn: false }, user: null, listStatus: "watching", listSort: "updated", schedMine: false, heroTimer: null };
 const entryIndex = new Map(); // card key -> entry (for quick +1)
 const mediaIndex = new Map(); // AniList id -> media (for quick add)
 const mine = new Set();       // "a<alId>" / "m<malId>" keys of everything on your list
@@ -73,7 +73,7 @@ const airedOf = m => (m.nextAiringEpisode ? m.nextAiringEpisode.episode - 1 : m.
 // Fill in airing info (new episodes, next episode) for list entries.
 async function enrich(entries) {
   const byAl = entries.filter(e => e.alId), byMal = entries.filter(e => !e.alId && e.malId);
-  const q = f => `query($ids: [Int], $page: Int) { Page(page: $page, perPage: 50) { media(${f}: $ids, type: ANIME) { id idMal status episodes format genres nextAiringEpisode { episode timeUntilAiring airingAt } coverImage { large color } } } }`;
+  const q = f => `query($ids: [Int], $page: Int) { Page(page: $page, perPage: 50) { media(${f}: $ids, type: ANIME) { id idMal title { romaji english } status episodes format genres nextAiringEpisode { episode timeUntilAiring airingAt } coverImage { large color } } } }`;
   const apply = (list, field, keyOf) => {
     const chunks = [];
     for (let i = 0; i < list.length; i += 50) chunks.push(list.slice(i, i + 50));
@@ -86,6 +86,7 @@ async function enrich(entries) {
         e.aired = airedOf(m); e.next = m.nextAiringEpisode; e.airStatus = m.status;
         if (!e.total && m.episodes) e.total = m.episodes;
         e.color = m.coverImage?.color; e.genres = m.genres; e.format = m.format;
+        if (!e.cover || !e.title) { e.cover ||= m.coverImage?.large; e.title = titleOf(m); }
       }
     }));
   };
@@ -114,7 +115,9 @@ const local = {
     const o = this.read(), k = "al:" + ref.alId, p = o[k] || {};
     o[k] = {
       alId: ref.alId, malId: ref.malId ?? p.malId ?? null, title: ref.title || p.title, cover: ref.cover || p.cover, total: ref.total || p.total || 0,
-      status: f.status ?? p.status ?? "plan_to_watch", watched: f.watched ?? p.watched ?? 0, score: f.score ?? p.score ?? 0, updated: Date.now(),
+      status: f.status ?? p.status ?? "plan_to_watch", watched: f.watched ?? p.watched ?? 0, score: f.score ?? p.score ?? 0,
+      started: f.started !== undefined ? f.started : p.started ?? null, finished: f.finished !== undefined ? f.finished : p.finished ?? null,
+      rewatches: f.rewatches ?? p.rewatches ?? 0, notes: f.notes ?? p.notes ?? "", updated: Date.now(),
     };
     this.write(o); return { ...o[k] };
   },
@@ -125,6 +128,7 @@ const local = {
 const fromMal = (n, ls) => ({
   malId: n.id, alId: null, title: n.title, cover: n.main_picture?.large || n.main_picture?.medium || "", total: n.num_episodes || 0,
   status: ls?.status, watched: ls?.num_episodes_watched || 0, score: ls?.score || 0, updated: Date.parse(ls?.updated_at) || 0,
+  started: ls?.start_date || null, finished: ls?.finish_date || null, rewatches: ls?.num_times_rewatched || 0, notes: ls?.comments || "",
 });
 
 const T = {
@@ -147,7 +151,8 @@ const T = {
   async get(ref) {
     if (!this.mal) return local.get(ref);
     if (!ref.malId) return null;
-    const r = await mal(`anime/${ref.malId}?fields=my_list_status,num_episodes`);
+    const r = await mal(`anime/${ref.malId}?fields=my_list_status{start_date,finish_date,num_times_rewatched,comments},num_episodes`)
+      .catch(() => mal(`anime/${ref.malId}?fields=my_list_status,num_episodes`));
     return r.my_list_status ? { ...fromMal(r, r.my_list_status), alId: ref.alId } : null;
   },
   async save(ref, f) {
@@ -157,8 +162,13 @@ const T = {
     if (f.status) body.set("status", f.status);
     if (f.watched != null) body.set("num_watched_episodes", f.watched);
     if (f.score != null) body.set("score", f.score);
+    if (f.started !== undefined) body.set("start_date", f.started || "");
+    if (f.finished !== undefined) body.set("finish_date", f.finished || "");
+    if (f.rewatches != null) body.set("num_times_rewatched", f.rewatches);
+    if (f.notes != null) body.set("comments", f.notes);
     const ls = await mal(`anime/${ref.malId}/my_list_status`, { method: "PATCH", body });
-    const e = { ...ref, status: ls.status, watched: ls.num_episodes_watched, score: ls.score, updated: Date.now() };
+    const e = { ...ref, status: ls.status, watched: ls.num_episodes_watched, score: ls.score, updated: Date.now(),
+      started: ls.start_date || null, finished: ls.finish_date || null, rewatches: ls.num_times_rewatched || 0, notes: ls.comments || "" };
     if (this.cache) {
       const i = this.cache.list.findIndex(x => x.malId === e.malId);
       i >= 0 ? (this.cache.list[i] = { ...this.cache.list[i], ...e }) : this.cache.list.unshift(e);
@@ -181,7 +191,33 @@ function progressFields(e, n) {
   if (total && n >= total) status = "completed";
   else if (n > 0 && (!status || status === "plan_to_watch" || status === "completed")) status = "watching";
   else if (!status) status = "plan_to_watch";
-  return { status, watched: n };
+  return withDates(e, { status, watched: n });
+}
+const todayStr = () => { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+// Auto-fill start/finish dates the first time a show is started or completed.
+function withDates(e, f) {
+  if (!e?.started && ((f.watched || 0) > 0 || f.status === "watching" || f.status === "completed")) f.started = todayStr();
+  if (f.status === "completed" && e?.status !== "completed" && !e?.finished) f.finished = todayStr();
+  return f;
+}
+
+const niceDate = s => { const [y, m, d] = String(s).split("-").map(Number); return y ? new Date(y, (m || 1) - 1, d || 1).toLocaleDateString([], { month: "short", day: "numeric", year: y !== new Date().getFullYear() ? "numeric" : undefined }) : s; };
+
+// =============== watch history (kept on this device) ===============
+const HKEY = "anitrack.history.v1";
+const history_ = {
+  read() { try { return JSON.parse(localStorage.getItem(HKEY)) || []; } catch { return []; } },
+  add(ev) { const h = this.read(); h.push(ev); try { localStorage.setItem(HKEY, JSON.stringify(h.slice(-3000))); } catch {} },
+};
+// Save + log what changed (episodes watched, completions, adds).
+async function track(ref, prev, fields) {
+  const saved = await T.save(ref, fields);
+  const a = prev?.watched || 0, b = saved.watched ?? a;
+  const base = { t: Date.now(), alId: ref.alId || null, malId: ref.malId || null, title: ref.title, cover: ref.cover };
+  if (b > a) history_.add({ ...base, kind: "ep", from: a + 1, to: b });
+  if (saved.status === "completed" && prev?.status !== "completed") history_.add({ ...base, kind: "done" });
+  if (!prev && saved.status && b === 0) history_.add({ ...base, kind: "add", status: saved.status });
+  return saved;
 }
 
 // =============== helpers ===============
@@ -255,12 +291,26 @@ function entryCard(e) {
   return `<div class="card" data-entry="${k}" style="--c:${esc(e.color || "#8b5cf6")}">
     <a class="poster" href="${linkOf(e)}"><img loading="lazy" src="${esc(e.cover)}" alt="">
       ${e.score ? `<span class="badge score">★ ${e.score}</span>` : ""}
-      ${fresh ? `<span class="badge new">${fresh > 99 ? "99+" : fresh} new</span>` : e.next && e.status === "watching" ? `<span class="badge next">EP ${e.next.episode} · ${until(e.next.timeUntilAiring)}</span>` : ""}
+      ${fresh ? `<span class="badge new">${fresh > 99 ? "99+" : fresh} ${e.airStatus === "RELEASING" ? "new" : "left"}</span>` : e.next && e.status === "watching" ? `<span class="badge next">EP ${e.next.episode} · ${until(e.next.timeUntilAiring)}</span>` : ""}
     </a>
     ${!(total && w >= total) ? `<button class="plus" data-plus="${k}" title="Mark episode ${w + 1} watched">+1 ep</button>` : ""}
     <div class="bar"><i style="width:${pct}%"></i></div>
     <a href="${linkOf(e)}" class="ct">${esc(e.title)}</a>
     <div class="cm">Ep ${w} / ${total || "?"}${fresh ? ` · <b class="hot">${fresh} to watch</b>` : ""}</div></div>`;
+}
+
+function listRow(e) {
+  const k = keyOf(e); entryIndex.set(k, e);
+  const total = e.total || 0, w = e.watched || 0;
+  const fresh = e.status === "watching" && e.aired != null ? Math.max(0, e.aired - w) : 0;
+  const pct = total ? Math.min(100, (w / total) * 100) : w ? 50 : 0;
+  return `<div class="lrow" data-row="${k}">
+    <a class="lr-t" href="${linkOf(e)}"><img loading="lazy" src="${esc(e.cover)}" alt=""><div><b>${esc(e.title)}</b>
+      <span>${[fmt(e.format), e.next && e.status === "watching" ? `EP ${e.next.episode} in ${until(e.next.timeUntilAiring)}` : null].filter(Boolean).join(" · ")}${fresh ? ` · <b class="hot">${fresh > 99 ? "99+" : fresh} ${e.airStatus === "RELEASING" ? "new" : "left"}</b>` : ""}</span></div></a>
+    <div class="lr-p"><button data-lstep="-1" data-k="${k}" aria-label="One episode less" ${w ? "" : "disabled"}>−</button><span>${w}<small> / ${total || "?"}</small></span><button data-lstep="1" data-k="${k}" aria-label="One episode more" ${total && w >= total ? "disabled" : ""}>+</button>
+      <div class="bar"><i style="width:${pct}%"></i></div></div>
+    <select data-lscore="${k}" aria-label="Score"><option value="0">–</option>${[10, 9, 8, 7, 6, 5, 4, 3, 2, 1].map(n => `<option value="${n}" ${e.score === n ? "selected" : ""}>★ ${n}</option>`).join("")}</select>
+  </div>`;
 }
 
 function row(title, items, render = card, sub = "", more = "") {
@@ -429,6 +479,7 @@ async function pageSchedule() {
   const mine = await T.all().catch(() => []);
   const mineSet = new Set(mine.flatMap(e => [e.alId && "a" + e.alId, e.malId && "m" + e.malId]).filter(Boolean));
   const isMine = m => mineSet.has("a" + m.id) || (m.idMal && mineSet.has("m" + m.idMal));
+  state.icsItems = all.filter(s => !s.media.isAdult && isMine(s.media) && s.airingAt * 1000 > Date.now());
   const items = all.filter(s => !s.media.isAdult && (state.schedMine ? isMine(s.media) : s.media.popularity > 800 || isMine(s.media)));
   const days = new Map();
   for (const s of items) {
@@ -440,7 +491,8 @@ async function pageSchedule() {
   const today = +start;
   const dayName = t => t === today ? "Today" : t === today + 86400000 ? "Tomorrow" : new Date(t).toLocaleDateString([], { weekday: "long" });
   view.innerHTML = `<div class="page fade-in"><div class="page-h"><div><h1>Airing schedule</h1><p>Times in your timezone · next 7 days</p></div>
-      <div class="tabs"><button data-sched="all" class="${state.schedMine ? "" : "on"}">All shows</button><button data-sched="mine" class="${state.schedMine ? "on" : ""}">My shows</button></div></div>
+      <div class="tabs"><button data-sched="all" class="${state.schedMine ? "" : "on"}">All shows</button><button data-sched="mine" class="${state.schedMine ? "on" : ""}">My shows</button>
+      ${state.icsItems.length ? `<button data-ics title="Download a calendar file with your shows' air times">📅 Add my shows to calendar</button>` : ""}</div></div>
     <div class="wrap-g">${days.size ? [...days].map(([t, list]) => `<section class="day ${t === today ? "today" : ""}">
       <h2>${dayName(t)} <small>${new Date(t).toLocaleDateString([], { month: "short", day: "numeric" })}</small></h2>
       <div class="sched">${list.map(s => `<a class="sitem ${isMine(s.media) ? "mine" : ""} ${s.airingAt < now ? "past" : ""}" href="#anime/${s.media.id}">
@@ -450,6 +502,17 @@ async function pageSchedule() {
       : `<div class="empty"><h3>${state.schedMine ? "None of your shows air this week" : "Nothing scheduled"}</h3>${state.schedMine ? `<p>Add airing shows to your Watching list to see them here.</p>` : ""}</div>`}</div></div>`;
   const upNext = $(".sitem:not(.past)");
   if (upNext && upNext !== $(".sitem")) scrollTo({ top: upNext.getBoundingClientRect().top + scrollY - 160, behavior: "instant" });
+}
+
+function downloadIcs() {
+  const stamp = t => new Date(t).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const escI = s => String(s).replace(/([,;\\])/g, "\\$1").replace(/\n/g, " ");
+  const base = state.auth.static ? location.origin + location.pathname : PAGES_URL;
+  const ev = state.icsItems.map(s => ["BEGIN:VEVENT", `UID:anitrack-${s.media.id}-${s.episode}@anitrack`, `DTSTAMP:${stamp(Date.now())}`,
+    `DTSTART:${stamp(s.airingAt * 1000)}`, "DURATION:PT24M", `SUMMARY:${escI(`${titleOf(s.media)} — Episode ${s.episode}`)}`,
+    `URL:${base}#anime/${s.media.id}`, "BEGIN:VALARM", "TRIGGER:-PT10M", "ACTION:DISPLAY", `DESCRIPTION:${escI(titleOf(s.media))} airs in 10 minutes`, "END:VALARM", "END:VEVENT"].join("\r\n"));
+  download("anitrack-schedule.ics", ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//AniTrack//EN", "CALSCALE:GREGORIAN", "X-WR-CALNAME:AniTrack", ...ev, "END:VCALENDAR"].join("\r\n") + "\r\n", "text/calendar");
+  toast(`${state.icsItems.length} episode${state.icsItems.length === 1 ? "" : "s"} exported — open the file to add them to your calendar`);
 }
 
 // ---------- my list ----------
@@ -482,17 +545,20 @@ async function pageMyList() {
        <button class="btn sm" data-export="mal" ${all.length ? "" : "disabled"}>Export for MAL</button><button class="btn sm" data-export="json" ${all.length ? "" : "disabled"}>Backup</button><label class="btn sm">Restore<input type="file" accept=".json" data-import hidden></label></div></div>`;
 
   view.innerHTML = `<div class="page fade-in">
-    <div class="page-h"><div><h1>My List</h1><p>${T.mal ? `Synced with MyAnimeList${state.user ? ` · ${esc(state.user.name)}` : ""}` : "Saved on this device"}</p></div></div>
+    <div class="page-h"><div><h1>My List</h1><p>${T.mal ? `Synced with MyAnimeList${state.user ? ` · ${esc(state.user.name)}` : ""}` : "Saved on this device"}</p></div>
+      ${all.length ? `<button class="btn sm" data-share-list>🔗 Share my list</button>` : ""}</div>
     <div class="stats">
       <div><b>${all.length}</b><span>Shows</span></div><div><b>${eps.toLocaleString()}</b><span>Episodes</span></div>
       <div><b>${days}</b><span>Days watched</span></div><div><b>${mean}</b><span>Mean score</span></div>
     </div>
     ${insights(all, counts)}
+    ${activityPanel()}
     ${banner}
     <div class="page-h"><div class="tabs">${Object.entries(STATUSES).map(([k, v]) => `<button data-list="${k}" class="${k === state.listStatus ? "on" : ""}">${v} <i>${counts[k]}</i></button>`).join("")}</div>
       <select data-sort-list aria-label="Sort">${Object.entries({ updated: "Recently updated", fresh: "New episodes", progress: "Progress", score: "Your score", title: "Title" })
-        .map(([k, v]) => `<option value="${k}" ${k === state.listSort ? "selected" : ""}>${v}</option>`).join("")}</select></div>
-    ${list.length ? `<div class="grid">${list.map(entryCard).join("")}</div>`
+        .map(([k, v]) => `<option value="${k}" ${k === state.listSort ? "selected" : ""}>${v}</option>`).join("")}</select>
+      <div class="seg" role="group" aria-label="View"><button data-view="grid" class="${state.listView === "grid" ? "on" : ""}" title="Poster grid">▦</button><button data-view="table" class="${state.listView === "table" ? "on" : ""}" title="Compact list">☰</button></div></div>
+    ${list.length ? state.listView === "table" ? `<div class="ltable">${list.map(listRow).join("")}</div>` : `<div class="grid">${list.map(entryCard).join("")}</div>`
       : `<div class="empty"><h3>Nothing in ${STATUSES[state.listStatus]}</h3><p>Open any show and tap an episode, or use “＋ My List”.</p><a class="btn" href="#home">Explore</a></div>`}
   </div>`;
 }
@@ -513,6 +579,86 @@ function insights(all, counts) {
     </div>
     ${top.length ? `<div class="panel"><h3>Your top genres</h3><div class="gbars">${top.map(([name, n]) => `<a href="#browse?genre=${encodeURIComponent(name)}" class="gbar"><span>${esc(name)}</span><div><i style="width:${(n / max) * 100}%"></i></div><b>${n}</b></a>`).join("")}</div></div>` : ""}
   </section>`;
+}
+
+const relTime = t => {
+  const s = (Date.now() - t) / 1000;
+  return s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : s < 604800 ? `${Math.floor(s / 86400)}d ago` : new Date(t).toLocaleDateString([], { month: "short", day: "numeric" });
+};
+function activityPanel() {
+  const h = history_.read();
+  if (!h.length) return "";
+  const dayKey = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return +d; };
+  const per = new Map();
+  h.filter(e => e.kind === "ep").forEach(e => per.set(dayKey(e.t), (per.get(dayKey(e.t)) || 0) + (e.to - e.from + 1)));
+  const days = Array.from({ length: 30 }, (_, i) => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - (29 - i)); return +d; });
+  const counts = days.map(d => per.get(d) || 0);
+  const max = Math.max(1, ...counts);
+  const total = counts.reduce((a, b) => a + b, 0);
+  let streak = 0;
+  for (let i = days.length - 1 - (counts[days.length - 1] ? 0 : 1); i >= 0 && counts[i]; i--) streak++;
+  const recent = h.slice(-12).reverse();
+  const line = e => e.kind === "ep" ? `Watched ${e.from === e.to ? `EP ${e.to}` : `EP ${e.from}–${e.to}`}` : e.kind === "done" ? "🎉 Completed" : `Added to ${STATUSES[e.status] || "list"}`;
+  return `<section class="activity fade-in">
+    <div class="panel"><h3>Last 30 days</h3>
+      <div class="act-sum"><div><b>${total}</b><span>episodes</span></div><div><b>${streak}</b><span>day streak${streak ? " 🔥" : ""}</span></div><div><b>${counts.filter(Boolean).length}</b><span>active days</span></div></div>
+      <div class="spark">${days.map((d, i) => `<i style="height:${counts[i] ? 12 + (counts[i] / max) * 88 : 4}%" class="${counts[i] ? "" : "zero"}" title="${new Date(d).toLocaleDateString([], { month: "short", day: "numeric" })}: ${counts[i]} ep${counts[i] === 1 ? "" : "s"}"></i>`).join("")}</div>
+      <div class="spark-x"><span>30 days ago</span><span>Today</span></div>
+    </div>
+    <div class="panel"><h3>Recent activity</h3><ul class="feed">${recent.map(e => `<li><a href="${e.alId ? `#anime/${e.alId}` : `#mal/${e.malId}`}"><img loading="lazy" src="${esc(e.cover)}" alt=""><div><b>${esc(e.title)}</b><span>${line(e)}</span></div><time>${relTime(e.t)}</time></a></li>`).join("")}</ul></div>
+  </section>`;
+}
+
+// ---------- shareable list links ----------
+const SCODE = { watching: "w", completed: "c", plan_to_watch: "p", on_hold: "h", dropped: "d" };
+const SREV = Object.fromEntries(Object.entries(SCODE).map(([k, v]) => [v, k]));
+const PAGES_URL = "https://eddyarriaga00.github.io/anitrack/";
+const b64u = bytes => { let s = ""; bytes.forEach(b => (s += String.fromCharCode(b))); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
+const unb64u = str => { let s = str.replace(/-/g, "+").replace(/_/g, "/"); while (s.length % 4) s += "="; return Uint8Array.from(atob(s), c => c.charCodeAt(0)); };
+const pipe = async (bytes, stream) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+async function encodeList(entries) {
+  const d = entries.filter(e => e.alId).map(e => [e.alId, SCODE[e.status] || "p", e.watched || 0, e.score || 0]);
+  const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, n: state.user?.name || "", d }));
+  return window.CompressionStream ? "z" + b64u(await pipe(bytes, new CompressionStream("deflate-raw"))) : "j" + b64u(bytes);
+}
+async function decodeList(code) {
+  let bytes = unb64u(code.slice(1));
+  if (code[0] === "z") bytes = await pipe(bytes, new DecompressionStream("deflate-raw"));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+async function shareList(btn) {
+  btn.disabled = true; btn.textContent = "Making link…";
+  try {
+    const all = await T.all();
+    await enrich(all.filter(e => !e.alId)).catch(() => {});
+    const url = (state.auth.static ? location.origin + location.pathname : PAGES_URL) + "#shared/" + await encodeList(all);
+    if (navigator.share && matchMedia("(hover: none)").matches) await navigator.share({ title: "My anime list", url }).catch(() => {});
+    else { await navigator.clipboard.writeText(url); toast(`Link to your ${all.length}-show list copied`); }
+  } catch (err) { toast("Couldn't make a share link: " + err.message, "err"); }
+  btn.disabled = false; btn.textContent = "🔗 Share my list";
+}
+async function pageShared(code) {
+  view.innerHTML = `<div class="page"><div class="page-h"><div><h1>Shared list</h1><p>Loading…</p></div></div>${skGrid(12)}</div>`;
+  const data = await decodeList(code).catch(() => null);
+  if (!data?.d) throw new Error("This shared-list link is broken or got cut off. Ask for the link again.");
+  const items = data.d.map(([id, s, w, sc]) => ({ id, status: SREV[s] || "plan_to_watch", w, sc }));
+  const media = new Map();
+  for (let i = 0; i < items.length; i += 50) {
+    const d = await al(`query($ids: [Int]) { Page(perPage: 50) { media(id_in: $ids, type: ANIME) { ${CARD} } } }`, { ids: items.slice(i, i + 50).map(x => x.id) });
+    d.Page.media.forEach(m => media.set(m.id, m));
+  }
+  const known = items.filter(x => media.has(x.id));
+  const counts = Object.fromEntries(Object.keys(STATUSES).map(k => [k, known.filter(x => x.status === k).length]));
+  const tab = state.sharedStatus && counts[state.sharedStatus] ? state.sharedStatus : Object.keys(STATUSES).find(k => counts[k]) || "watching";
+  const common = known.filter(x => isMine(media.get(x.id))).length;
+  const scored = known.filter(x => x.sc);
+  const mean = scored.length ? (scored.reduce((a, x) => a + x.sc, 0) / scored.length).toFixed(1) : null;
+  const shown = known.filter(x => x.status === tab).sort((a, b) => b.sc - a.sc);
+  document.title = `${data.n ? data.n + "'s" : "Shared"} anime list · AniTrack`;
+  view.innerHTML = `<div class="page fade-in"><div class="page-h"><div><div class="kicker">Shared list</div><h1>${data.n ? `${esc(data.n)}'s anime list` : "Someone's anime list"}</h1>
+      <p>${known.length} shows${mean ? ` · mean score ${mean}` : ""}${common ? ` · <b class="hot">${common} also on your list</b>` : ""}</p></div></div>
+    <div class="page-h"><div class="tabs">${Object.entries(STATUSES).map(([k, v]) => `<button data-shared="${k}" class="${k === tab ? "on" : ""}">${v} <i>${counts[k]}</i></button>`).join("")}</div></div>
+    <div class="grid">${shown.map(x => { const m = media.get(x.id); return card(m, `<span class="badge next">${x.sc ? `★ ${x.sc} · ` : ""}${x.w}/${m.episodes || "?"} eps</span>`); }).join("")}</div></div>`;
 }
 
 // ---------- studio ----------
@@ -694,6 +840,11 @@ function renderTracker() {
       ${total ? `<div class="bar" style="margin:0"><i style="width:${Math.min(100, (w / total) * 100)}%"></i></div>` : ""}
       <label>Status<select data-field="status"><option value="">Not on list</option>${Object.entries(STATUSES).map(([k, v]) => `<option value="${k}" ${k === e?.status ? "selected" : ""}>${v}</option>`).join("")}</select></label>
       <label>Your score<select data-field="score"><option value="0">No score</option>${[10, 9, 8, 7, 6, 5, 4, 3, 2, 1].map(n => `<option value="${n}" ${e?.score === n ? "selected" : ""}>${n} — ${SCORE_WORDS[n]}</option>`).join("")}</select></label>
+      ${e ? `<details class="more-d" ${cur.moreOpen ? "open" : ""}><summary>Dates, rewatches &amp; notes${e.started ? ` <small>· started ${esc(niceDate(e.started))}${e.finished ? `, finished ${esc(niceDate(e.finished))}` : ""}</small>` : ""}</summary>
+        <div class="two"><label>Started<input type="date" data-field="started" value="${esc(e.started || "")}"></label><label>Finished<input type="date" data-field="finished" value="${esc(e.finished || "")}"></label></div>
+        <label>Times rewatched<input type="number" min="0" max="99" data-field="rewatches" value="${e.rewatches || 0}"></label>
+        <label>Notes<textarea data-field="notes" rows="3" maxlength="2000" placeholder="Thoughts, favorite moments, where you left off…">${esc(e.notes || "")}</textarea></label>
+      </details>` : ""}
       <div class="saved" id="saved"></div>
       ${!T.mal ? `<p class="note small">Saved on this device. ${state.auth.configured ? `<a class="link" href="/auth/login">Connect MAL</a> to sync.` : `<a class="link" href="#mylist">Send to MAL</a>`}</p>` : ""}
       ${e ? `<button class="link" data-remove>Remove from list</button>` : ""}
@@ -715,7 +866,7 @@ function renderTracker() {
 async function updateEntry(fields, msg) {
   const saved = $("#saved"); if (saved) saved.textContent = "Saving…";
   try {
-    cur.e = await T.save({ ...cur.ref, ...(cur.e ? {} : {}) }, fields);
+    cur.e = await track(cur.ref, cur.e, fields);
     renderTracker();
     $("#saved") && ($("#saved").textContent = T.mal ? "✓ Synced to MyAnimeList" : "✓ Saved");
     if (msg) toast(msg);
@@ -766,7 +917,7 @@ async function syncLocalToMal(btn) {
   let ok = 0; const done = [];
   for (const e of entries) {
     btn.textContent = `Syncing ${ok + 1}/${entries.length}…`;
-    try { await T.save(e, { status: e.status, watched: e.watched, score: e.score }); ok++; done.push("al:" + e.alId); } catch {}
+    try { await T.save(e, { status: e.status, watched: e.watched, score: e.score, started: e.started, finished: e.finished, rewatches: e.rewatches, notes: e.notes }); ok++; done.push("al:" + e.alId); } catch {}
     await sleep(250);
   }
   local.clear(done); T.cache = null;
@@ -798,6 +949,7 @@ async function route(opts = {}) {
     else if (tab === "random") await pageRandom();
     else if (tab === "studio" && arg) await pageStudio(arg);
     else if (tab === "character" && arg) await pageCharacter(arg);
+    else if (tab === "shared" && arg) await pageShared(arg);
     else await pageHome();
   } catch (e) {
     if (token === routeToken) view.innerHTML = `<div class="page">${errorBox(e)}</div>`;
@@ -808,7 +960,7 @@ async function route(opts = {}) {
 
 // =============== events ===============
 document.addEventListener("click", async ev => {
-  const t = ev.target.closest("[data-trailer],[data-scroll],[data-dot],[data-qadd],[data-plus],[data-ep],[data-step],[data-list],[data-sched],[data-remove],[data-more],[data-more-browse],[data-more-studio],[data-inline-trailer],[data-retry],[data-logout],[data-close],[data-export],[data-sync],[data-share]");
+  const t = ev.target.closest("[data-trailer],[data-scroll],[data-dot],[data-qadd],[data-plus],[data-ep],[data-step],[data-list],[data-sched],[data-remove],[data-more],[data-more-browse],[data-more-studio],[data-inline-trailer],[data-retry],[data-logout],[data-close],[data-export],[data-sync],[data-share],[data-share-list],[data-shared],[data-view],[data-lstep],[data-ics]");
   if (!t) return;
   const d = t.dataset;
   if (d.trailer) openTrailer(d.trailer);
@@ -820,7 +972,7 @@ document.addEventListener("click", async ev => {
     if (isMine(m)) { location.hash = `#anime/${m.id}`; return; }
     t.disabled = true;
     try {
-      await T.save(refOf(m), { status: "plan_to_watch" });
+      await track(refOf(m), null, { status: "plan_to_watch" });
       toast(`Added ${titleOf(m)} to Plan to watch`);
       $$(`[data-qadd="${m.id}"]`).forEach(b => {
         b.disabled = false;
@@ -835,8 +987,8 @@ document.addEventListener("click", async ev => {
     t.disabled = true;
     try {
       const f = progressFields(e, (e.watched || 0) + 1);
-      const saved = await T.save(e, f);
-      Object.assign(e, { status: saved.status, watched: saved.watched, score: saved.score, updated: Date.now() });
+      const saved = await track(e, { ...e }, f);
+      Object.assign(e, { status: saved.status, watched: saved.watched, score: saved.score, started: saved.started, finished: saved.finished, updated: Date.now() });
       toast(f.status === "completed" ? `🎉 Completed ${e.title}!` : `${e.title} · EP ${f.watched} logged`);
       const cardEl = t.closest(".card");
       const onList = location.hash.startsWith("#mylist");
@@ -862,6 +1014,22 @@ document.addEventListener("click", async ev => {
   else if (d.close !== undefined) t.closest("dialog").close();
   else if (d.export) exportList(d.export);
   else if (d.sync !== undefined) syncLocalToMal(t);
+  else if (d.shareList !== undefined) shareList(t);
+  else if (d.shared) { state.sharedStatus = d.shared; route({ keepScroll: true }); }
+  else if (d.view) { state.listView = d.view; try { localStorage.setItem("anitrack.view", d.view); } catch {} route({ keepScroll: true }); }
+  else if (d.ics !== undefined) downloadIcs();
+  else if (d.lstep) {
+    const e = entryIndex.get(d.k); if (!e) return;
+    t.disabled = true;
+    try {
+      const f = progressFields(e, (e.watched || 0) + Number(d.lstep));
+      const saved = await track(e, { ...e }, f);
+      Object.assign(e, { status: saved.status, watched: saved.watched, started: saved.started, finished: saved.finished, updated: Date.now() });
+      if (f.status === "completed" && Number(d.lstep) > 0) toast(`🎉 Completed ${e.title}!`);
+      if (e.status !== state.listStatus) route({ keepScroll: true });
+      else t.closest(".lrow").outerHTML = listRow(e);
+    } catch (err) { toast(err.message, "err"); t.disabled = false; }
+  }
   else if (d.share !== undefined) {
     const url = location.href, title = titleOf(cur.m);
     if (navigator.share) navigator.share({ title, url }).catch(() => {});
@@ -872,6 +1040,11 @@ document.addEventListener("click", async ev => {
 document.addEventListener("change", ev => {
   const el = ev.target;
   if (el.matches("[data-import]") && el.files[0]) return importBackup(el.files[0]);
+  if (el.matches("[data-lscore]")) {
+    const e = entryIndex.get(el.dataset.lscore); if (!e) return;
+    track(e, { ...e }, { score: Number(el.value) }).then(s => { e.score = s.score; toast(`Scored ${e.title} ${s.score || "–"}`); }).catch(err => toast(err.message, "err"));
+    return;
+  }
   if (el.matches("[data-sort-list]")) { state.listSort = el.value; return route({ keepScroll: true }); }
   if (el.matches("[data-browse]")) {
     const p = hashParams(); el.value ? p.set(el.dataset.browse, el.value) : p.delete(el.dataset.browse);
@@ -885,12 +1058,19 @@ document.addEventListener("change", ev => {
     if (!el.value) return $("[data-remove]")?.click();
     const fields = { status: el.value };
     if (el.value === "completed" && cur.m.episodes) fields.watched = cur.m.episodes;
-    updateEntry(fields, `Moved to ${STATUSES[el.value]}`);
+    updateEntry(withDates(cur.e, fields), `Moved to ${STATUSES[el.value]}`);
+  } else if (f === "started" || f === "finished") {
+    updateEntry({ [f]: el.value || null }, "Date saved");
+  } else if (f === "rewatches") {
+    updateEntry({ rewatches: Math.max(0, Math.min(99, Number(el.value) || 0)) }, "Saved");
+  } else if (f === "notes") {
+    updateEntry({ notes: el.value.slice(0, 2000) }, "Notes saved");
   } else if (f === "score") {
     updateEntry({ score: Number(el.value), ...(cur.e ? {} : { status: "plan_to_watch" }) }, "Score saved");
   }
 });
 
+document.addEventListener("toggle", e => { if (e.target.matches?.(".more-d")) cur.moreOpen = e.target.open; }, true);
 $("#player").addEventListener("click", e => { if (e.target.id === "player") e.target.close(); });
 
 const sug = { timer: null, idx: -1, items: [], token: 0 };

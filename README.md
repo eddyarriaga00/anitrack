@@ -31,6 +31,11 @@ GitHub Pages only hosts static files. MyAnimeList's API requires a small server 
   - One tap for "✓ Watched episode N", or tap any episode number. Set status and score too.
   - Shows are marked completed automatically on the last episode.
   - Every card on My List has a **+1 ep** button.
+- **Dates, rewatches and notes:** start and finish dates fill in automatically (and can be edited), plus a rewatch count and private notes. All of these sync to MAL when connected.
+- **Watch history:** a 30-day episode chart, your day streak and a recent-activity feed
+- **Share your list:** "🔗 Share my list" copies a link anyone can open on the live site, with your statuses, progress, scores and how many shows they share with you
+- **Table view:** a compact list on My List with inline −/+ episode buttons and score pickers
+- **Calendar export:** on the Schedule page, "📅 Add my shows to calendar" downloads an .ics file with your shows' air times and a 10-minute reminder
 - **My List:** stats (shows, episodes, days watched, mean score), a status breakdown, your top genres, status tabs with counts, and sorting by recent, new episodes, progress, score or title
 - **Works without setup:** your list is saved in your browser right away. Once you connect MAL, a **Sync to MAL** button copies it over.
 - **Export for MAL:** produces an XML file to upload at myanimelist.net/import.php, so you can update MAL even without API setup. **Backup** and **Restore** use a JSON file.

@@ -18,6 +18,7 @@ GitHub Pages only hosts static files. MyAnimeList's API requires a small server 
 ## Features
 
 - **Home:** a rotating trending banner, your Continue watching shows with "N new" badges, shows airing in the next 24 hours, this season, coming soon, popular and top rated
+- **Browse filters:** airing status, minimum score (7+, 8+, 9+) and "Hide my list", on top of season, year, format, genre and sort. Light, dark or system theme with the ◐ button.
 - **Browse:** pick a season (with ‹ Prev / Next › buttons), year, format, genre and sort, then load more. Every filter is in the URL, so you can bookmark or share a view.
 - **Schedule:** the next 7 days of episodes in your timezone. Shows on your list are highlighted, and "My shows" filters to just yours.
 - **Instant search:** results appear as you type, with arrow-key navigation and Enter to open

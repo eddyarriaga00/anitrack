@@ -1,3 +1,23 @@
+:root[data-theme="light"] {
+  --bg: #f6f6fa; --bg2: #ffffff; --card: #ffffff; --card2: #f0f0f7; --line: rgba(20,20,40,.1);
+  --text: #15151f; --dim: #55556a; --faint: #8a8aa0;
+  color-scheme: light;
+}
+:root[data-theme="light"] .top { background: rgba(246,246,250,.9); }
+:root[data-theme="light"] .top.solid { background: rgba(246,246,250,.92); box-shadow: 0 1px 0 var(--line); }
+:root[data-theme="light"] .hero::after, :root[data-theme="light"] .slide::after { }
+:root[data-theme="light"] .slide::after { background: linear-gradient(90deg, rgba(246,246,250,.96) 0%, rgba(246,246,250,.78) 40%, rgba(246,246,250,.15) 80%), linear-gradient(0deg, var(--bg) 0%, rgba(246,246,250,0) 45%); }
+:root[data-theme="light"] .hero p, :root[data-theme="light"] .synopsis { color: #33334a; }
+:root[data-theme="light"] .d-banner::after { background: linear-gradient(0deg, var(--bg) 0%, rgba(246,246,250,.6) 55%, rgba(246,246,250,.4) 100%); }
+:root[data-theme="light"] .btn { background: rgba(0,0,0,.05); }
+:root[data-theme="light"] .btn:hover { background: rgba(0,0,0,.09); }
+:root[data-theme="light"] .btn.primary { color: #fff; }
+:root[data-theme="light"] .suggest { background: rgba(255,255,255,.98); }
+:root[data-theme="light"] .sg:hover, :root[data-theme="light"] .sg.on { background: rgba(139,92,246,.1); }
+:root[data-theme="light"] .askbar { background: rgba(255,255,255,.97); }
+:root[data-theme="light"] .toast { background: #fff; }
+:root[data-theme="light"] .card .ct, :root[data-theme="light"] .ct { color: var(--text); }
+:root[data-theme="light"] .poster { background: #e8e8f0; }
 :root {
   --bg: #09090f; --bg2: #101018; --card: #15151f; --card2: #1c1c29; --line: rgba(255,255,255,.08);
   --text: #ececf3; --dim: #9b9bb0; --faint: #6b6b80;
@@ -297,6 +317,12 @@ dl.facts { max-width: 420px; margin: 0 0 18px; }
 .askbar div { margin-right: 6px; min-width: 0; }
 .askbar b { display: block; font-size: 15px; }
 .askbar span { font-size: 12.5px; color: var(--dim); display: block; max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- round 5 ---------- */
+.theme { width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-size: 16px; line-height: 1; color: var(--text); flex: none; }
+.theme:hover { border-color: var(--accent); }
+.hide-mine { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); cursor: pointer; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); }
+.hide-mine input { accent-color: var(--accent2); }
 
 /* skeletons */
 .sk { background: linear-gradient(100deg, var(--card) 30%, var(--card2) 50%, var(--card) 70%); background-size: 300% 100%; animation: sh 1.4s infinite linear; border-radius: var(--r); }

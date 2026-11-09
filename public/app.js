@@ -433,18 +433,22 @@ const SORTS = { TRENDING_DESC: "Trending", POPULARITY_DESC: "Popular", SCORE_DES
 let browsePage = 1;
 async function pageBrowse(append) {
   const p = hashParams();
-  const f = { genre: p.get("genre") || "", sort: p.get("sort") || (p.get("season") ? "POPULARITY_DESC" : "TRENDING_DESC"), season: p.get("season") || "", year: p.get("year") || "", format: p.get("format") || "" };
+  const f = { genre: p.get("genre") || "", sort: p.get("sort") || (p.get("season") ? "POPULARITY_DESC" : "TRENDING_DESC"), season: p.get("season") || "", year: p.get("year") || "", format: p.get("format") || "", status: p.get("status") || "", minScore: p.get("minScore") || "", hideMine: p.get("hideMine") || "" };
   const link = changes => "#browse?" + new URLSearchParams(Object.entries({ ...f, ...changes }).filter(([, v]) => v)).toString();
   const { season: cs, year: cy } = currentSeason();
   const years = Array.from({ length: cy - 1969 }, (_, i) => cy + 1 - i);
   const sIdx = SEASONS.indexOf(f.season);
   const shift = d => { let i = sIdx + d, y = Number(f.year || cy); if (i < 0) { i = 3; y--; } if (i > 3) { i = 0; y++; } return link({ season: SEASONS[i], year: y }); };
   const title = f.season ? `${cap(f.season)} ${f.year || cy}` : f.genre ? f.genre : "Browse";
-  const head = `<div class="page-h"><div><h1>${esc(title)}</h1><p>${[f.genre || "All genres", f.format ? fmt(f.format) : null, SORTS[f.sort]].filter(Boolean).map(esc).join(" · ")}</p></div>
+  const STATUS_LBL = { RELEASING: "Airing", FINISHED: "Finished", NOT_YET_RELEASED: "Upcoming" };
+  const head = `<div class="page-h"><div><h1>${esc(title)}</h1><p>${[f.genre || "All genres", f.format ? fmt(f.format) : null, f.status ? STATUS_LBL[f.status] : null, f.minScore ? `${f.minScore}+ rated` : null, f.hideMine ? "Hiding my list" : null, SORTS[f.sort]].filter(Boolean).map(esc).join(" · ")}</p></div>
       <div class="season-nav">
         ${f.season ? `<a class="btn sm" href="${shift(-1)}">‹ Prev</a>` : ""}
         <select data-browse="season" aria-label="Season"><option value="">Any season</option>${SEASONS.map(s => `<option value="${s}" ${s === f.season ? "selected" : ""}>${cap(s)}</option>`).join("")}</select>
         <select data-browse="year" aria-label="Year"><option value="">Any year</option>${years.map(y => `<option ${String(y) === f.year ? "selected" : ""}>${y}</option>`).join("")}</select>
+        <select data-browse="status" aria-label="Airing status"><option value="">Any status</option>${Object.entries(STATUS_LBL).map(([k, v]) => `<option value="${k}" ${k === f.status ? "selected" : ""}>${v}</option>`).join("")}</select>
+        <select data-browse="minScore" aria-label="Minimum score"><option value="">Any score</option>${[90, 80, 70, 60].map(n => `<option value="${n}" ${String(n) === f.minScore ? "selected" : ""}>${n / 10}+ ★</option>`).join("")}</select>
+        <label class="hide-mine"><input type="checkbox" data-browse-toggle="hideMine" ${f.hideMine ? "checked" : ""}> Hide my list</label>
         <select data-browse="format" aria-label="Format"><option value="">Any format</option>${Object.entries(FORMATS).map(([k, v]) => `<option value="${k}" ${k === f.format ? "selected" : ""}>${v}</option>`).join("")}</select>
         ${f.season ? `<a class="btn sm" href="${shift(1)}">Next ›</a>` : `<a class="btn sm" href="${link({ season: cs, year: cy })}">This season</a>`}
       </div></div>
@@ -454,14 +458,17 @@ async function pageBrowse(append) {
   const vars = {
     page: browsePage, sort: [f.sort], genre: f.genre || undefined, format: f.format || undefined,
     season: f.season || undefined, seasonYear: f.year ? Number(f.year) : f.season ? cy : undefined,
-    notYet: f.season || f.year ? undefined : "NOT_YET_RELEASED",
+    notYet: f.status ? undefined : f.season || f.year ? undefined : "NOT_YET_RELEASED",
+    status: f.status || undefined, minScore: f.minScore ? Number(f.minScore) : undefined,
   };
-  const data = await al(`query($page: Int, $sort: [MediaSort], $genre: String, $format: MediaFormat, $season: MediaSeason, $seasonYear: Int, $notYet: MediaStatus) {
-    Page(page: $page, perPage: 42) { pageInfo { hasNextPage } media(type: ANIME, sort: $sort, genre: $genre, format: $format, season: $season, seasonYear: $seasonYear, isAdult: false, status_not: $notYet) { ${CARD} } } }`, vars);
-  const cards = data.Page.media.map(m => card(m)).join("");
+  const data = await al(`query($page: Int, $sort: [MediaSort], $genre: String, $format: MediaFormat, $season: MediaSeason, $seasonYear: Int, $notYet: MediaStatus, $status: MediaStatus, $minScore: Int) {
+    Page(page: $page, perPage: 42) { pageInfo { hasNextPage } media(type: ANIME, sort: $sort, genre: $genre, format: $format, season: $season, seasonYear: $seasonYear, isAdult: false, status_not: $notYet, status: $status, averageScore_greater: $minScore) { ${CARD} } } }`, vars);
+  if (f.hideMine) { await T.all().then(refresh => { mine.clear(); refresh.forEach(e => mineKeys(e).forEach(k => mine.add(k))); }).catch(() => {}); }
+  const shown = f.hideMine ? data.Page.media.filter(m => !isMine(m)) : data.Page.media;
+  const cards = shown.map(m => card(m)).join("");
   const more = data.Page.pageInfo.hasNextPage ? `<div class="more"><button class="btn" data-more-browse>Load more</button></div>` : "";
   if (append) { $("#browse-grid").insertAdjacentHTML("beforeend", cards); $(".more")?.remove(); $("#browse-grid").insertAdjacentHTML("afterend", more); }
-  else view.innerHTML = `<div class="page">${head}${data.Page.media.length ? `<div class="grid fade-in" id="browse-grid">${cards}</div>${more}` : `<div class="empty"><h3>Nothing matches these filters</h3><a class="btn" href="#browse">Reset filters</a></div>`}</div>`;
+  else view.innerHTML = `<div class="page">${head}${shown.length ? `<div class="grid fade-in" id="browse-grid">${cards}</div>${more}` : `<div class="empty"><h3>Nothing matches these filters</h3><a class="btn" href="#browse">Reset filters</a></div>`}</div>`;
 }
 
 // ---------- weekly airing schedule ----------
@@ -1125,6 +1132,10 @@ document.addEventListener("change", ev => {
   }
   if (el.matches("[data-global-service]")) { prefs.set({ service: el.value }); toast(el.value ? `${el.value} is now your default` : "Default cleared"); return; }
   if (el.matches("[data-sort-list]")) { state.listSort = el.value; return route({ keepScroll: true }); }
+  if (el.matches("[data-browse-toggle]")) {
+    const p = hashParams(); el.checked ? p.set(el.dataset.browseToggle, "1") : p.delete(el.dataset.browseToggle);
+    location.hash = "browse?" + p.toString(); return;
+  }
   if (el.matches("[data-browse]")) {
     const p = hashParams(); el.value ? p.set(el.dataset.browse, el.value) : p.delete(el.dataset.browse);
     if (el.dataset.browse === "season" && el.value && !p.get("year")) p.set("year", currentSeason().year);
@@ -1211,6 +1222,24 @@ const onScroll = () => $("#top").classList.toggle("solid", scrollY > 40 || !$(".
 addEventListener("scroll", onScroll, { passive: true });
 addEventListener("hashchange", () => route());
 addEventListener("storage", e => { if (e.key === LS_KEY && location.hash.startsWith("#mylist")) route({ keepScroll: true }); });
+// Theme: follow the system unless you pick light or dark.
+const THEME_KEY = "anitrack.theme";
+function applyTheme(t) {
+  const mode = t === "light" ? "light" : t === "dark" ? "dark" : (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+  document.documentElement.dataset.theme = mode;
+  const b = $("#theme"); if (b) b.title = `Theme: ${mode} (click to switch)`;
+}
+let themePref = (() => { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch { return "auto"; } })();
+applyTheme(themePref);
+$("#theme").addEventListener("click", () => {
+  const order = ["auto", "dark", "light"];
+  themePref = order[(order.indexOf(themePref) + 1) % 3];
+  try { localStorage.setItem(THEME_KEY, themePref); } catch {}
+  applyTheme(themePref);
+  toast(`Theme: ${themePref === "auto" ? "system" : themePref}`);
+});
+matchMedia("(prefers-color-scheme: light)").addEventListener?.("change", () => themePref === "auto" && applyTheme("auto"));
+
 loadAuth().then(() => route());
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

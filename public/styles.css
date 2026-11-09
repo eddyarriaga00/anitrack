@@ -324,6 +324,15 @@ dl.facts { max-width: 420px; margin: 0 0 18px; }
 .hide-mine { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); cursor: pointer; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); }
 .hide-mine input { accent-color: var(--accent2); }
 
+/* ---------- round 6 ---------- */
+.list-q { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--text); font-size: 13.5px; outline: none; min-width: 180px; }
+.list-q:focus { border-color: var(--accent); }
+.sitem-wrap { position: relative; }
+.sitem-wrap .sitem { width: 100%; }
+.sw-go { position: absolute; right: 10px; bottom: 10px; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; background: var(--grad); color: #fff; opacity: 0; transition: opacity .15s; }
+.sitem-wrap:hover .sw-go, .sw-go:focus-visible { opacity: 1; }
+@media (hover: none) { .sw-go { opacity: 1; } }
+
 /* skeletons */
 .sk { background: linear-gradient(100deg, var(--card) 30%, var(--card2) 50%, var(--card) 70%); background-size: 300% 100%; animation: sh 1.4s infinite linear; border-radius: var(--r); }
 .sk.poster-sk { aspect-ratio: 2/3; }

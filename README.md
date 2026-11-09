@@ -38,6 +38,8 @@ GitHub Pages only hosts static files. MyAnimeList's API requires a small server 
 - **Share your list:** "🔗 Share my list" copies a link anyone can open on the live site, with your statuses, progress, scores and how many shows they share with you
 - **Table view:** a compact list on My List with inline −/+ episode buttons and score pickers
 - **Calendar export:** on the Schedule page, "📅 Add my shows to calendar" downloads an .ics file with your shows' air times and a 10-minute reminder
+- **Search and filter your list:** a search box and format filter on My List
+- **Schedule Watch links:** each airing entry has a ▶ Watch link to its show page
 - **My List:** stats (shows, episodes, days watched, mean score), a status breakdown, your top genres, status tabs with counts, and sorting by recent, new episodes, progress, score or title
 - **Works without setup:** your list is saved in your browser right away. Once you connect MAL, a **Sync to MAL** button copies it over.
 - **Export for MAL:** produces an XML file to upload at myanimelist.net/import.php, so you can update MAL even without API setup. **Backup** and **Restore** use a JSON file.

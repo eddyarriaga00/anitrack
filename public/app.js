@@ -502,10 +502,11 @@ async function pageSchedule() {
       ${state.icsItems.length ? `<button data-ics title="Download a calendar file with your shows' air times">📅 Add my shows to calendar</button>` : ""}</div></div>
     <div class="wrap-g">${days.size ? [...days].map(([t, list]) => `<section class="day ${t === today ? "today" : ""}">
       <h2>${dayName(t)} <small>${new Date(t).toLocaleDateString([], { month: "short", day: "numeric" })}</small></h2>
-      <div class="sched">${list.map(s => `<a class="sitem ${isMine(s.media) ? "mine" : ""} ${s.airingAt < now ? "past" : ""}" href="#anime/${s.media.id}">
+      <div class="sched">${list.map(s => `<div class="sitem-wrap"><a class="sitem ${isMine(s.media) ? "mine" : ""} ${s.airingAt < now ? "past" : ""}" href="#anime/${s.media.id}">
         <time>${clock(s.airingAt)}</time><img loading="lazy" src="${esc(s.media.coverImage?.large)}" alt="">
         <div><b>${esc(titleOf(s.media))}</b><span>EP ${s.episode}${s.media.episodes ? ` of ${s.media.episodes}` : ""}${s.airingAt < now ? " · aired" : ` · in ${until(s.airingAt - now)}`}</span></div>
-        ${isMine(s.media) ? `<em>On your list</em>` : ""}</a>`).join("")}</div></section>`).join("")
+        ${isMine(s.media) ? `<em>On your list</em>` : ""}</a>
+        <a class="sw-go" href="#anime/${s.media.id}" title="Open the Watch button for this show">▶ Watch</a></div>`).join("")}</div></section>`).join("")
       : `<div class="empty"><h3>${state.schedMine ? "None of your shows air this week" : "Nothing scheduled"}</h3>${state.schedMine ? `<p>Add airing shows to your Watching list to see them here.</p>` : ""}</div>`}</div></div>`;
   const upNext = $(".sitem:not(.past)");
   if (upNext && upNext !== $(".sitem")) scrollTo({ top: upNext.getBoundingClientRect().top + scrollY - 160, behavior: "instant" });
@@ -529,6 +530,9 @@ async function pageMyList() {
   const counts = Object.fromEntries(Object.keys(STATUSES).map(k => [k, all.filter(e => e.status === k).length]));
   if (!state.listChosen && !counts[state.listStatus]) state.listStatus = Object.keys(STATUSES).find(k => counts[k]) || "watching";
   let list = all.filter(e => e.status === state.listStatus);
+  const qf = (state.listQuery || "").toLowerCase().trim(), ff = state.listFormat || "";
+  if (qf) list = list.filter(e => String(e.title).toLowerCase().includes(qf));
+  if (ff) list = list.filter(e => e.format === ff);
   await enrich(all.filter(e => e.status === state.listStatus || all.length <= 400)).catch(() => {});
   const sorters = {
     updated: (a, b) => b.updated - a.updated,
@@ -565,6 +569,8 @@ async function pageMyList() {
     <div class="page-h"><div class="tabs">${Object.entries(STATUSES).map(([k, v]) => `<button data-list="${k}" class="${k === state.listStatus ? "on" : ""}">${v} <i>${counts[k]}</i></button>`).join("")}</div>
       <select data-sort-list aria-label="Sort">${Object.entries({ updated: "Recently updated", fresh: "New episodes", progress: "Progress", score: "Your score", title: "Title" })
         .map(([k, v]) => `<option value="${k}" ${k === state.listSort ? "selected" : ""}>${v}</option>`).join("")}</select>
+      <input class="list-q" type="search" placeholder="Search your list…" value="${esc(state.listQuery || "")}" data-list-q aria-label="Search your list">
+      <select data-list-format aria-label="Format"><option value="">All formats</option>${Object.entries(FORMATS).map(([k, v]) => `<option value="${k}" ${k === ff ? "selected" : ""}>${v}</option>`).join("")}</select>
       <div class="seg" role="group" aria-label="View"><button data-view="grid" class="${state.listView === "grid" ? "on" : ""}" title="Poster grid">▦</button><button data-view="table" class="${state.listView === "table" ? "on" : ""}" title="Compact list">☰</button></div></div>
     ${list.length ? state.listView === "table" ? `<div class="ltable">${list.map(listRow).join("")}</div>` : `<div class="grid">${list.map(entryCard).join("")}</div>`
       : `<div class="empty"><h3>Nothing in ${STATUSES[state.listStatus]}</h3><p>Open any show and tap an episode, or use “＋ My List”.</p><a class="btn" href="#home">Explore</a></div>`}
@@ -1131,6 +1137,7 @@ document.addEventListener("change", ev => {
     renderTracker(); toast(`Watching ${titleOf(cur.m)} on ${el.value}`); return;
   }
   if (el.matches("[data-global-service]")) { prefs.set({ service: el.value }); toast(el.value ? `${el.value} is now your default` : "Default cleared"); return; }
+  if (el.matches("[data-list-format]")) { state.listFormat = el.value; return route({ keepScroll: true }); }
   if (el.matches("[data-sort-list]")) { state.listSort = el.value; return route({ keepScroll: true }); }
   if (el.matches("[data-browse-toggle]")) {
     const p = hashParams(); el.checked ? p.set(el.dataset.browseToggle, "1") : p.delete(el.dataset.browseToggle);
@@ -1160,6 +1167,16 @@ document.addEventListener("change", ev => {
   }
 });
 
+let listQTimer;
+document.addEventListener("input", e => {
+  if (!e.target.matches("[data-list-q]")) return;
+  clearTimeout(listQTimer);
+  listQTimer = setTimeout(() => {
+    state.listQuery = e.target.value;
+    const pos = e.target.selectionStart;
+    route({ keepScroll: true }).then(() => { const q = $("[data-list-q]"); if (q) { q.focus(); q.setSelectionRange(pos, pos); } });
+  }, 250);
+});
 document.addEventListener("toggle", e => { if (e.target.matches?.(".more-d")) cur.moreOpen = e.target.open; }, true);
 $("#player").addEventListener("click", e => { if (e.target.id === "player") e.target.close(); });
 

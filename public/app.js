@@ -15,6 +15,15 @@ const SCORE_WORDS = ["", "Appalling", "Horrible", "Very bad", "Bad", "Average", 
 
 const state = { auth: { configured: false, loggedIn: false }, user: null, listStatus: "watching", listSort: "updated", schedMine: false, heroTimer: null };
 const entryIndex = new Map(); // card key -> entry (for quick +1)
+const mediaIndex = new Map(); // AniList id -> media (for quick add)
+const mine = new Set();       // "a<alId>" / "m<malId>" keys of everything on your list
+const mineKeys = e => [e.alId && "a" + e.alId, e.malId && "m" + e.malId].filter(Boolean);
+const isMine = m => mine.has("a" + m.id) || (!!m.idMal && mine.has("m" + m.idMal));
+async function refreshMine() {
+  const all = await T.all().catch(() => []);
+  mine.clear(); all.forEach(e => mineKeys(e).forEach(k => mine.add(k)));
+  return all;
+}
 
 // =============== AniList ===============
 const alCache = new Map();
@@ -64,7 +73,7 @@ const airedOf = m => (m.nextAiringEpisode ? m.nextAiringEpisode.episode - 1 : m.
 // Fill in airing info (new episodes, next episode) for list entries.
 async function enrich(entries) {
   const byAl = entries.filter(e => e.alId), byMal = entries.filter(e => !e.alId && e.malId);
-  const q = f => `query($ids: [Int], $page: Int) { Page(page: $page, perPage: 50) { media(${f}: $ids, type: ANIME) { id idMal status episodes nextAiringEpisode { episode timeUntilAiring airingAt } coverImage { large color } } } }`;
+  const q = f => `query($ids: [Int], $page: Int) { Page(page: $page, perPage: 50) { media(${f}: $ids, type: ANIME) { id idMal status episodes format genres nextAiringEpisode { episode timeUntilAiring airingAt } coverImage { large color } } } }`;
   const apply = (list, field, keyOf) => {
     const chunks = [];
     for (let i = 0; i < list.length; i += 50) chunks.push(list.slice(i, i + 50));
@@ -76,7 +85,7 @@ async function enrich(entries) {
         e.alId ??= m.id; e.malId ??= m.idMal;
         e.aired = airedOf(m); e.next = m.nextAiringEpisode; e.airStatus = m.status;
         if (!e.total && m.episodes) e.total = m.episodes;
-        e.color = m.coverImage?.color;
+        e.color = m.coverImage?.color; e.genres = m.genres; e.format = m.format;
       }
     }));
   };
@@ -142,6 +151,7 @@ const T = {
     return r.my_list_status ? { ...fromMal(r, r.my_list_status), alId: ref.alId } : null;
   },
   async save(ref, f) {
+    mineKeys(ref).forEach(k => mine.add(k));
     if (!this.mal) return local.save(ref, f);
     const body = new URLSearchParams();
     if (f.status) body.set("status", f.status);
@@ -156,6 +166,7 @@ const T = {
     return e;
   },
   async remove(ref) {
+    mineKeys(ref).forEach(k => mine.delete(k));
     if (!this.mal) return local.remove(ref);
     await mal(`anime/${ref.malId}/my_list_status`, { method: "DELETE" }).catch(() => {});
     if (this.cache) this.cache.list = this.cache.list.filter(x => x.malId !== ref.malId);
@@ -223,14 +234,17 @@ function renderAuth() {
 
 // =============== cards & rows ===============
 function card(m, extra = "") {
+  mediaIndex.set(m.id, m);
   const next = m.nextAiringEpisode;
   const meta = [fmt(m.format), m.episodes ? `${m.episodes} eps` : null, m.seasonYear].filter(Boolean).join(" · ");
-  return `<a class="card" href="#anime/${m.id}" style="--c:${esc(m.coverImage?.color || "#8b5cf6")}">
-    <div class="poster"><img loading="lazy" src="${esc(m.coverImage?.large)}" alt="">
+  const on = isMine(m);
+  return `<div class="card ${on ? "on-list" : ""}" style="--c:${esc(m.coverImage?.color || "#8b5cf6")}">
+    <a class="poster" href="#anime/${m.id}"><img loading="lazy" src="${esc(m.coverImage?.large)}" alt="">
       ${m.averageScore ? `<span class="badge score">★ ${score(m.averageScore)}</span>` : ""}
       ${extra || (next ? `<span class="badge next">EP ${next.episode} · ${until(next.timeUntilAiring)}</span>` : "")}
-    </div>
-    <div class="ct">${esc(titleOf(m))}</div><div class="cm">${esc(meta)}</div></a>`;
+    </a>
+    ${T.canTrack(refOf(m)) ? `<button class="qadd" data-qadd="${m.id}" title="${on ? "On your list" : "Add to Plan to watch"}" aria-label="${on ? "On your list" : "Add to Plan to watch"}">${on ? "✓" : "＋"}</button>` : ""}
+    <a class="ct" href="#anime/${m.id}">${esc(titleOf(m))}</a><div class="cm">${esc(meta)}</div></div>`;
 }
 
 function entryCard(e) {
@@ -280,7 +294,7 @@ function hero(list) {
       <div class="actions">
         <a class="btn primary" href="#anime/${m.id}">View details</a>
         ${m.trailer?.site === "youtube" ? `<button class="btn" data-trailer="${esc(m.trailer.id)}">▶ Trailer</button>` : ""}
-        ${T.canTrack(refOf(m)) ? `<button class="btn" data-add="${m.id}">＋ My List</button>` : ""}
+        ${T.canTrack(refOf(m)) ? isMine(m) ? `<a class="btn" href="#anime/${m.id}">✓ On your list</a>` : `<button class="btn" data-qadd="${m.id}">＋ My List</button>` : ""}
       </div></div></div>`;
   }).join("")}
   <div class="dots">${items.map((_, i) => `<button data-dot="${i}" class="${i ? "" : "on"}" aria-label="Slide ${i + 1}"></button>`).join("")}</div></section>`;
@@ -297,7 +311,6 @@ function startHero() {
   clearInterval(state.heroTimer); state.heroIdx = state.heroIdx || 0;
   state.heroTimer = setInterval(() => !document.hidden && heroGo(state.heroIdx + 1), 8000);
 }
-const heroMedia = new Map(); // AniList id -> media, for "+ My List" buttons
 
 // =============== pages ===============
 async function pageHome() {
@@ -312,20 +325,22 @@ async function pageHome() {
     popular: Page(perPage: 20) { media(type: ANIME, sort: POPULARITY_DESC, isAdult: false) { ${CARD} } }
     top: Page(perPage: 20) { media(type: ANIME, sort: SCORE_DESC, isAdult: false) { ${CARD} } }
   }`;
-  const [data, mine] = await Promise.all([
+  const [data, mine_all] = await Promise.all([
     al(q, { season, year, from: now, to: now + 86400 }),
     T.all().catch(() => []),
   ]);
-  const watching = mine.filter(e => e.status === "watching");
+  const watching = mine_all.filter(e => e.status === "watching");
   await enrich(watching).catch(() => {});
   watching.sort((a, b) => (Math.max(0, (b.aired ?? 0) - b.watched) > 0) - (Math.max(0, (a.aired ?? 0) - a.watched) > 0) || b.updated - a.updated);
-  data.trending.media.forEach(m => heroMedia.set(m.id, m));
+  data.trending.media.forEach(m => mediaIndex.set(m.id, m));
   const soon = data.soon.airingSchedules.filter(s => !s.media.isAdult && s.media.popularity > 2000).slice(0, 20);
   const seasonName = cap(season);
+  const because = await becauseRow(mine_all).catch(() => "");
 
   view.innerHTML = hero(data.trending.media) + `<div class="rows">
     ${row("Continue watching", watching.slice(0, 24), entryCard, T.mal ? "synced with MAL" : "", "#mylist")}
-    ${!mine.length ? onboarding() : ""}
+    ${!mine_all.length ? onboarding() : ""}
+    ${because}
     ${row("Trending now", data.trending.media, card, "", "#browse?sort=TRENDING_DESC")}
     ${row("Airing in the next 24 hours", soon, s => card(s.media, `<span class="badge next">EP ${s.episode} · ${clock(s.airingAt)}</span>`), "", "#schedule")}
     ${row(`${seasonName} ${year}`, data.airing.media, card, "this season", `#browse?season=${season}&year=${year}`)}
@@ -334,6 +349,17 @@ async function pageHome() {
     ${row("Top rated", data.top.media, card, "", "#browse?sort=SCORE_DESC")}
   </div>`;
   startHero();
+}
+
+async function becauseRow(all) {
+  const pool = all.filter(e => e.status === "completed" || e.status === "watching")
+    .sort((a, b) => (b.score || 0) - (a.score || 0) || b.updated - a.updated).slice(0, 6);
+  if (!pool.length) return "";
+  const seed = pool[Math.floor(Math.random() * pool.length)];
+  const arg = seed.alId ? "id: $id" : "idMal: $id";
+  const d = await al(`query($id: Int) { Media(${arg}, type: ANIME) { id title { romaji english } recommendations(perPage: 25, sort: RATING_DESC) { nodes { mediaRecommendation { ${CARD} } } } } }`, { id: seed.alId || seed.malId });
+  const recs = (d?.Media?.recommendations.nodes || []).map(n => n.mediaRecommendation).filter(m => m && !isMine(m));
+  return recs.length >= 3 ? row(`Because you watched <a class="because" href="#anime/${d.Media.id}">${esc(titleOf(d.Media))}</a>`, recs) : "";
 }
 
 function onboarding() {
@@ -431,8 +457,9 @@ async function pageMyList() {
   view.innerHTML = `<div class="page"><div class="page-h"><div><h1>My List</h1></div></div>${skGrid(12)}</div>`;
   const all = await T.all(true);
   const counts = Object.fromEntries(Object.keys(STATUSES).map(k => [k, all.filter(e => e.status === k).length]));
+  if (!state.listChosen && !counts[state.listStatus]) state.listStatus = Object.keys(STATUSES).find(k => counts[k]) || "watching";
   let list = all.filter(e => e.status === state.listStatus);
-  if (state.listStatus === "watching") await enrich(list).catch(() => {});
+  await enrich(all.filter(e => e.status === state.listStatus || all.length <= 400)).catch(() => {});
   const sorters = {
     updated: (a, b) => b.updated - a.updated,
     title: (a, b) => a.title.localeCompare(b.title),
@@ -460,6 +487,7 @@ async function pageMyList() {
       <div><b>${all.length}</b><span>Shows</span></div><div><b>${eps.toLocaleString()}</b><span>Episodes</span></div>
       <div><b>${days}</b><span>Days watched</span></div><div><b>${mean}</b><span>Mean score</span></div>
     </div>
+    ${insights(all, counts)}
     ${banner}
     <div class="page-h"><div class="tabs">${Object.entries(STATUSES).map(([k, v]) => `<button data-list="${k}" class="${k === state.listStatus ? "on" : ""}">${v} <i>${counts[k]}</i></button>`).join("")}</div>
       <select data-sort-list aria-label="Sort">${Object.entries({ updated: "Recently updated", fresh: "New episodes", progress: "Progress", score: "Your score", title: "Title" })
@@ -467,6 +495,24 @@ async function pageMyList() {
     ${list.length ? `<div class="grid">${list.map(entryCard).join("")}</div>`
       : `<div class="empty"><h3>Nothing in ${STATUSES[state.listStatus]}</h3><p>Open any show and tap an episode, or use “＋ My List”.</p><a class="btn" href="#home">Explore</a></div>`}
   </div>`;
+}
+
+const STATUS_COLORS = { watching: "#8b5cf6", completed: "#34d399", plan_to_watch: "#60a5fa", on_hold: "#fbbf24", dropped: "#f87171" };
+function insights(all, counts) {
+  if (all.length < 2) return "";
+  const g = new Map();
+  all.forEach(e => (e.genres || []).forEach(x => g.set(x, (g.get(x) || 0) + 1)));
+  const top = [...g].sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const max = top[0]?.[1] || 1;
+  const fav = all.filter(e => e.score).sort((a, b) => b.score - a.score)[0];
+  return `<section class="insights fade-in">
+    <div class="panel"><h3>Status breakdown</h3>
+      <div class="stack">${Object.keys(STATUSES).filter(k => counts[k]).map(k => `<i style="flex:${counts[k]};background:${STATUS_COLORS[k]}" title="${STATUSES[k]}: ${counts[k]}"></i>`).join("")}</div>
+      <ul class="legend">${Object.entries(STATUSES).map(([k, v]) => `<li><i style="background:${STATUS_COLORS[k]}"></i>${v}<b>${counts[k]}</b></li>`).join("")}</ul>
+      ${fav ? `<p class="fav">Highest rated: <a href="${linkOf(fav)}">${esc(fav.title)}</a> <span>★ ${fav.score}</span></p>` : ""}
+    </div>
+    ${top.length ? `<div class="panel"><h3>Your top genres</h3><div class="gbars">${top.map(([name, n]) => `<a href="#browse?genre=${encodeURIComponent(name)}" class="gbar"><span>${esc(name)}</span><div><i style="width:${(n / max) * 100}%"></i></div><b>${n}</b></a>`).join("")}</div></div>` : ""}
+  </section>`;
 }
 
 // ---------- studio ----------
@@ -486,6 +532,40 @@ async function pageStudio(id, append) {
       <p>${st.favourites ? `♥ ${st.favourites.toLocaleString()} fans on AniList` : ""}${best.length ? ` · Best rated: ${best.map(m => esc(titleOf(m))).join(", ")}` : ""}</p></div>
       <a class="btn sm" href="${esc(st.siteUrl)}" target="_blank" rel="noopener">AniList ↗</a></div>
     <div class="grid" id="studio-grid">${list.map(m => card(m)).join("")}</div>${more}</div>`;
+}
+
+// ---------- character ----------
+function cleanMd(t) {
+  return cleanText(String(t || "")
+    .replace(/~![\s\S]*?!~/g, "")
+    .replace(/__(.+?)__/g, "$1").replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1"));
+}
+async function pageCharacter(id) {
+  view.innerHTML = `<div class="page"><div class="wrap"><div class="sk" style="width:200px;aspect-ratio:2/3"></div></div></div>`;
+  const d = await al(`query($id: Int) { Character(id: $id) { id name { full native alternative } image { large } description age gender bloodType
+    dateOfBirth { month day } favourites siteUrl
+    media(sort: POPULARITY_DESC, perPage: 30, type: ANIME) { edges { characterRole voiceActors(language: JAPANESE) { id name { full } image { medium } } node { ${CARD} isAdult } } } } }`, { id: Number(id) });
+  const c = d.Character;
+  if (!c) throw new Error("Character not found.");
+  document.title = `${c.name.full} · AniTrack`;
+  const edges = (c.media?.edges || []).filter(e => !e.node.isAdult);
+  const va = edges.find(e => e.voiceActors?.length)?.voiceActors[0];
+  const bday = c.dateOfBirth?.month ? new Date(2000, c.dateOfBirth.month - 1, c.dateOfBirth.day || 1).toLocaleDateString([], { month: "long", ...(c.dateOfBirth.day ? { day: "numeric" } : {}) }) : null;
+  const facts = [["Age", c.age], ["Gender", c.gender], ["Birthday", bday], ["Blood type", c.bloodType], ["Voice (JP)", va?.name.full], ["Fans", c.favourites ? `♥ ${c.favourites.toLocaleString()}` : null]].filter(([, v]) => v);
+  const desc = cleanMd(c.description);
+  view.innerHTML = `<div class="page fade-in"><div class="wrap char-page">
+    <img class="d-cover" src="${esc(c.image?.large)}" alt="">
+    <div>
+      <div class="kicker">Character</div>
+      <h1>${esc(c.name.full)}</h1>
+      <div class="alt">${esc([c.name.native, ...(c.name.alternative || []).slice(0, 3)].filter(Boolean).join(" · "))}</div>
+      ${facts.length ? `<dl class="info facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>` : ""}
+      ${desc ? `<div class="synopsis ${desc.length > 700 ? "clamp" : ""}" id="syn">${esc(desc)}</div>${desc.length > 700 ? `<button class="link" data-more style="margin-top:8px">Read more</button>` : ""}` : ""}
+      <p class="note small" style="margin-top:14px">Spoilers hidden. <a class="link" href="${esc(c.siteUrl)}" target="_blank" rel="noopener">Full profile on AniList ↗</a></p>
+    </div></div>
+    ${edges.length ? `<div class="page-h" style="margin-top:36px"><h2>Appears in</h2></div><div class="grid">${edges.map(e => card(e.node, `<span class="badge next">${e.characterRole === "MAIN" ? "Main role" : e.characterRole === "SUPPORTING" ? "Supporting" : "Background"}</span>`)).join("")}</div>` : ""}
+  </div>`;
 }
 
 // ---------- random ----------
@@ -509,7 +589,7 @@ async function pageDetail(kind, id) {
     externalLinks { site url type icon color language }
     streamingEpisodes { title thumbnail url site }
     tags { name rank isMediaSpoiler }
-    characters(perPage: 12, sort: [ROLE, RELEVANCE]) { edges { role node { name { full } image { medium } } voiceActors(language: JAPANESE) { name { full } } } }
+    characters(perPage: 12, sort: [ROLE, RELEVANCE]) { edges { role node { id name { full } image { medium } } voiceActors(language: JAPANESE) { name { full } } } }
     relations { edges { relationType(version: 2) node { ${CARD} type } } }
     recommendations(perPage: 16, sort: RATING_DESC) { nodes { mediaRecommendation { ${CARD} } } }
   } }`, { id: Number(id) });
@@ -579,8 +659,9 @@ async function pageDetail(kind, id) {
         ${m.trailer?.site === "youtube" ? `<section class="sec"><h2>Trailer</h2>
           <div class="trailer" data-inline-trailer="${esc(m.trailer.id)}" style="background-image:url('https://i.ytimg.com/vi/${esc(m.trailer.id)}/hqdefault.jpg')">
           <div class="play"><svg viewBox="0 0 24 24" width="30" height="30"><path fill="#fff" d="M8 5v14l11-7z"/></svg></div></div></section>` : ""}
-        ${chars.length ? `<section class="sec"><h2>Characters</h2><div class="chars">${chars.map(c => `<div class="char"><img loading="lazy" src="${esc(c.node.image?.medium)}" alt=""><div><b>${esc(c.node.name?.full)}</b><span>${c.role === "MAIN" ? "Main" : "Supporting"}${c.voiceActors?.[0] ? ` · CV ${esc(c.voiceActors[0].name.full)}` : ""}</span></div></div>`).join("")}</div></section>` : ""}
-        ${row("Related", related, r => card(r, `<span class="badge next">${esc(relLabel(r._rel))}</span>`))}
+        ${chars.length ? `<section class="sec"><h2>Characters</h2><div class="chars">${chars.map(c => `<a class="char" href="#character/${c.node.id}"><img loading="lazy" src="${esc(c.node.image?.medium)}" alt=""><div><b>${esc(c.node.name?.full)}</b><span>${c.role === "MAIN" ? "Main" : "Supporting"}${c.voiceActors?.[0] ? ` · CV ${esc(c.voiceActors[0].name.full)}` : ""}</span></div></a>`).join("")}</div></section>` : ""}
+        ${related.length ? row("Franchise", [...related, { ...m, _rel: "CURRENT" }].sort((a, b) => (a.seasonYear || 9999) - (b.seasonYear || 9999)),
+          r => r._rel === "CURRENT" ? card(r, `<span class="badge here">You're here</span>`) : card(r, `<span class="badge next">${esc(relLabel(r._rel))} · ${r.seasonYear || "TBA"}</span>`), "in release order") : ""}
         ${row("You might also like", recs)}
       </div>
     </div>
@@ -704,6 +785,9 @@ async function route(opts = {}) {
   $$("nav a").forEach(a => a.classList.toggle("on", a.dataset.tab === (tab || "home")));
   if (tab !== "search" && document.activeElement !== $("#search").q) $("#search").q.value = "";
   if (!opts.keepScroll) window.scrollTo({ top: 0, behavior: "instant" });
+  document.body.classList.add("loading");
+  closeSuggest();
+  await refreshMine();
   document.title = { browse: "Browse", schedule: "Schedule", mylist: "My List", search: `Search: ${arg}` }[tab] ? `${{ browse: "Browse", schedule: "Schedule", mylist: "My List", search: `Search: ${arg}` }[tab]} · AniTrack` : "AniTrack";
   try {
     if (tab === "anime" || tab === "mal") { await pageDetail(tab, arg); document.title = `${titleOf(cur.m)} · AniTrack`; }
@@ -713,28 +797,37 @@ async function route(opts = {}) {
     else if (tab === "mylist") await pageMyList();
     else if (tab === "random") await pageRandom();
     else if (tab === "studio" && arg) await pageStudio(arg);
+    else if (tab === "character" && arg) await pageCharacter(arg);
     else await pageHome();
   } catch (e) {
     if (token === routeToken) view.innerHTML = `<div class="page">${errorBox(e)}</div>`;
   }
+  if (token === routeToken) document.body.classList.remove("loading");
   onScroll();
 }
 
 // =============== events ===============
 document.addEventListener("click", async ev => {
-  const t = ev.target.closest("[data-trailer],[data-scroll],[data-dot],[data-add],[data-plus],[data-ep],[data-step],[data-list],[data-sched],[data-remove],[data-more],[data-more-browse],[data-more-studio],[data-inline-trailer],[data-retry],[data-logout],[data-close],[data-export],[data-sync],[data-share]");
+  const t = ev.target.closest("[data-trailer],[data-scroll],[data-dot],[data-qadd],[data-plus],[data-ep],[data-step],[data-list],[data-sched],[data-remove],[data-more],[data-more-browse],[data-more-studio],[data-inline-trailer],[data-retry],[data-logout],[data-close],[data-export],[data-sync],[data-share]");
   if (!t) return;
   const d = t.dataset;
   if (d.trailer) openTrailer(d.trailer);
   else if (d.scroll) { const x = t.closest(".row").querySelector(".track-x"); x.scrollBy({ left: x.clientWidth * 0.85 * Number(d.scroll), behavior: "smooth" }); }
   else if (d.dot) { heroGo(Number(d.dot)); startHero(); }
-  else if (d.add) {
-    const m = heroMedia.get(Number(d.add)); if (!m) return;
+  else if (d.qadd) {
+    ev.preventDefault();
+    const m = mediaIndex.get(Number(d.qadd)); if (!m) return;
+    if (isMine(m)) { location.hash = `#anime/${m.id}`; return; }
+    t.disabled = true;
     try {
-      const existing = await T.get(refOf(m)).catch(() => null);
-      if (!existing) await T.save(refOf(m), { status: "plan_to_watch" });
-      toast(existing ? "Already on your list" : "Added to Plan to watch"); t.textContent = "✓ On your list"; t.disabled = true;
-    } catch (err) { toast(err.message, "err"); }
+      await T.save(refOf(m), { status: "plan_to_watch" });
+      toast(`Added ${titleOf(m)} to Plan to watch`);
+      $$(`[data-qadd="${m.id}"]`).forEach(b => {
+        b.disabled = false;
+        if (b.classList.contains("qadd")) { b.textContent = "✓"; b.title = "On your list"; b.closest(".card")?.classList.add("on-list"); }
+        else b.textContent = "✓ On your list";
+      });
+    } catch (err) { toast(err.message, "err"); t.disabled = false; }
   }
   else if (d.plus) {
     ev.preventDefault();
@@ -755,7 +848,7 @@ document.addEventListener("click", async ev => {
   else if (d.ep) { const n = Number(d.ep); setProgress(n === (cur.e?.watched || 0) ? n - 1 : n); }
   else if (d.step) setProgress((cur.e?.watched || 0) + Number(d.step));
   else if (d.remove) { await T.remove(cur.ref); cur.e = null; renderTracker(); toast("Removed from your list"); }
-  else if (d.list) { state.listStatus = d.list; route({ keepScroll: true }); }
+  else if (d.list) { state.listStatus = d.list; state.listChosen = true; route({ keepScroll: true }); }
   else if (d.sched) { state.schedMine = d.sched === "mine"; route(); }
   else if (d.more !== undefined) { $("#syn").classList.remove("clamp"); t.remove(); }
   else if (d.moreBrowse !== undefined) { t.disabled = true; t.textContent = "Loading…"; browsePage++; pageBrowse(true).catch(err => toast(err.message, "err")); }
@@ -800,17 +893,46 @@ document.addEventListener("change", ev => {
 
 $("#player").addEventListener("click", e => { if (e.target.id === "player") e.target.close(); });
 
-let searchTimer;
+const sug = { timer: null, idx: -1, items: [], token: 0 };
+function closeSuggest() { $("#suggest").hidden = true; sug.idx = -1; }
+function renderSuggest(q) {
+  const box = $("#suggest");
+  if (!sug.items.length) { box.innerHTML = `<div class="sg-empty">No matches for “${esc(q)}”</div>`; box.hidden = false; return; }
+  box.innerHTML = sug.items.map((m, i) => `<a class="sg ${i === sug.idx ? "on" : ""}" href="#anime/${m.id}" data-i="${i}">
+      <img src="${esc(m.coverImage?.medium)}" alt=""><div><b>${esc(titleOf(m))}</b><span>${[fmt(m.format), m.seasonYear, m.episodes ? `${m.episodes} eps` : null].filter(Boolean).join(" · ")}</span></div>
+      ${m.averageScore ? `<em>★ ${score(m.averageScore)}</em>` : ""}${isMine(m) ? `<i>On list</i>` : ""}</a>`).join("")
+    + `<a class="sg-all ${sug.idx === sug.items.length ? "on" : ""}" href="#search/${encodeURIComponent(q)}">See all results for “${esc(q)}” →</a>`;
+  box.hidden = false;
+}
+async function loadSuggest(q) {
+  const token = ++sug.token;
+  const d = await al(`query($q: String) { Page(perPage: 7) { media(type: ANIME, search: $q, isAdult: false, sort: SEARCH_MATCH) { id idMal title { romaji english } coverImage { medium } format seasonYear episodes averageScore } } }`, { q }).catch(() => null);
+  if (token !== sug.token || !d || $("#search").q.value.trim() !== q) return;
+  sug.items = d.Page.media; sug.idx = -1;
+  renderSuggest(q);
+}
 const goSearch = q => {
   const h = "#search/" + encodeURIComponent(q);
   location.hash.startsWith("#search/") ? location.replace(h) : (location.hash = h);
 };
-$("#search").addEventListener("submit", e => { e.preventDefault(); const q = e.target.q.value.trim(); if (q) goSearch(q); });
+$("#search").addEventListener("submit", e => { e.preventDefault(); const q = e.target.q.value.trim(); if (q) { closeSuggest(); e.target.q.blur(); goSearch(q); } });
 $("#search").q.addEventListener("input", e => {
-  clearTimeout(searchTimer);
+  clearTimeout(sug.timer);
   const q = e.target.value.trim();
-  if (q.length >= 3) searchTimer = setTimeout(() => goSearch(q), 450);
+  if (q.length < 2) return closeSuggest();
+  sug.timer = setTimeout(() => loadSuggest(q), 220);
 });
+$("#search").q.addEventListener("keydown", e => {
+  const box = $("#suggest");
+  if (box.hidden || !sug.items.length) return;
+  const max = sug.items.length;
+  if (e.key === "ArrowDown") { e.preventDefault(); sug.idx = Math.min(max, sug.idx + 1); renderSuggest(e.target.value.trim()); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); sug.idx = Math.max(-1, sug.idx - 1); renderSuggest(e.target.value.trim()); }
+  else if (e.key === "Enter" && sug.idx >= 0) { e.preventDefault(); location.hash = sug.idx < max ? `#anime/${sug.items[sug.idx].id}` : `#search/${encodeURIComponent(e.target.value.trim())}`; e.target.blur(); }
+  else if (e.key === "Escape") closeSuggest();
+});
+$("#search").q.addEventListener("focus", e => { if (e.target.value.trim().length >= 2 && sug.items.length) renderSuggest(e.target.value.trim()); });
+document.addEventListener("pointerdown", e => { if (!e.target.closest("#search")) closeSuggest(); });
 
 // Keyboard: "/" search, "g h/b/s/l" go to pages, ←/→ hero
 let gPending = false;
@@ -821,6 +943,7 @@ document.addEventListener("keydown", e => {
   }
   if (e.key === "/") { e.preventDefault(); $("#search").q.focus(); $("#search").q.select(); }
   else if (gPending) { gPending = false; const to = { h: "#home", b: "#browse", s: "#schedule", l: "#mylist", r: "#random" }[e.key]; if (to) location.hash = to; }
+  else if (e.key === "?") toast("Shortcuts: / search · g h home · g b browse · g s schedule · g l list · g r random");
   else if (e.key === "g") { gPending = true; setTimeout(() => (gPending = false), 900); }
   else if ($(".hero") && (e.key === "ArrowRight" || e.key === "ArrowLeft")) { heroGo(state.heroIdx + (e.key === "ArrowRight" ? 1 : -1)); startHero(); }
 });

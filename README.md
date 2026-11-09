@@ -20,17 +20,22 @@ GitHub Pages only hosts static files. MyAnimeList's API requires a small server 
 - **Home:** a rotating trending banner, your Continue watching shows with "N new" badges, shows airing in the next 24 hours, this season, coming soon, popular and top rated
 - **Browse:** pick a season (with ‹ Prev / Next › buttons), year, format, genre and sort, then load more. Every filter is in the URL, so you can bookmark or share a view.
 - **Schedule:** the next 7 days of episodes in your timezone. Shows on your list are highlighted, and "My shows" filters to just yours.
+- **Instant search:** results appear as you type, with arrow-key navigation and Enter to open
+- **Quick add:** a ＋ on every poster adds the show to Plan to watch, and shows already on your list get a ✓
+- **Because you watched…:** recommendations on Home based on shows you rated highly, skipping ones already on your list
+- **Character pages:** age, birthday, Japanese voice actor, a bio with spoilers hidden, and every show they appear in
+- **Franchise timeline:** prequels, sequels and spin-offs in release order, with "You're here" on the current show
 - **Studio pages:** every show from a studio, with its best-rated titles
 - **Show pages:** synopsis, tags, trailer, characters with Japanese voice actors, related shows, recommendations, official "Where to watch" links, a next-episode countdown, official episode thumbnails when available, and a Share button
 - **Tracking:**
   - One tap for "✓ Watched episode N", or tap any episode number. Set status and score too.
   - Shows are marked completed automatically on the last episode.
   - Every card on My List has a **+1 ep** button.
-- **My List:** stats (shows, episodes, days watched, mean score), status tabs with counts, and sorting by recent, new episodes, progress, score or title
+- **My List:** stats (shows, episodes, days watched, mean score), a status breakdown, your top genres, status tabs with counts, and sorting by recent, new episodes, progress, score or title
 - **Works without setup:** your list is saved in your browser right away. Once you connect MAL, a **Sync to MAL** button copies it over.
 - **Export for MAL:** produces an XML file to upload at myanimelist.net/import.php, so you can update MAL even without API setup. **Backup** and **Restore** use a JSON file.
 - **🎲 Surprise me:** opens a random popular show
-- **Keyboard shortcuts:** `/` search · `g h` home · `g b` browse · `g s` schedule · `g l` my list · `g r` random · `←/→` move the banner
+- **Keyboard shortcuts:** `/` search · `g h` home · `g b` browse · `g s` schedule · `g l` my list · `g r` random · `←/→` move the banner · `?` list shortcuts
 - **Installable:** can be installed as an app from Chrome or Edge (address bar install icon), or added to your phone's home screen. App files are cached for offline use.
 
 Show data comes from the AniList public API. Tracking goes to MyAnimeList through the small local server.
